@@ -1,70 +1,74 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
-  static const String baseUrl = 'http://10.0.2.2:3000/api'; // Android emulator -> localhost
-  String? _accessToken;
+  static const String _baseUrlKey = 'api_base_url';
+  static const String _tokenKey = 'jwt_token';
 
-  void setToken(String token) {
-    _accessToken = token;
+  // En emulador Android 10.0.2.2 apunta al localhost de la PC; en web/Windows localhost
+  static const String defaultBaseUrl = 'http://localhost:3000/api';
+
+  Future<String> getBaseUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_baseUrlKey) ?? defaultBaseUrl;
   }
 
-  void clearToken() {
-    _accessToken = null;
+  Future<void> setBaseUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_baseUrlKey, url.trim().replaceAll(RegExp(r'/$'), ''));
   }
 
-  Map<String, String> get _headers => {
-    'Content-Type': 'application/json',
-    if (_accessToken != null) 'Authorization': 'Bearer $_accessToken',
-  };
+  Future<String?> getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_tokenKey);
+  }
 
-  Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl$path'),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
+  Future<Map<String, String>> _headers() async {
+    final token = await getToken();
+    return {
+      'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
+
+  Future<List<dynamic>> getVehicles() async {
+    final baseUrl = await getBaseUrl();
+    final response = await http
+        .get(Uri.parse('$baseUrl/vehicles'), headers: await _headers())
+        .timeout(const Duration(seconds: 10));
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      return jsonDecode(response.body);
+      return jsonDecode(response.body) as List<dynamic>;
     }
-
-    throw ApiException(response.statusCode, response.body);
+    throw Exception('Error ${response.statusCode}: ${response.body}');
   }
 
-  Future<Map<String, dynamic>> get(String path) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl$path'),
-      headers: _headers,
-    );
+  Future<List<dynamic>> getScans() async {
+    final baseUrl = await getBaseUrl();
+    final response = await http
+        .get(Uri.parse('$baseUrl/scans'), headers: await _headers())
+        .timeout(const Duration(seconds: 10));
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      return jsonDecode(response.body);
+      return jsonDecode(response.body) as List<dynamic>;
     }
-
-    throw ApiException(response.statusCode, response.body);
+    throw Exception('Error ${response.statusCode}: ${response.body}');
   }
 
-  Future<List<dynamic>> getList(String path) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl$path'),
-      headers: _headers,
-    );
+  Future<Map<String, dynamic>> submitScan(Map<String, dynamic> payload) async {
+    final baseUrl = await getBaseUrl();
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/scans'),
+          headers: await _headers(),
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 15));
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      return jsonDecode(response.body);
+      return jsonDecode(response.body) as Map<String, dynamic>;
     }
-
-    throw ApiException(response.statusCode, response.body);
+    throw Exception('Error ${response.statusCode}: ${response.body}');
   }
-}
-
-class ApiException implements Exception {
-  final int statusCode;
-  final String body;
-
-  ApiException(this.statusCode, this.body);
-
-  @override
-  String toString() => 'ApiException($statusCode): $body';
 }
