@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'core/api/api_client.dart';
+import 'core/auth/auth_service.dart';
+import 'features/auth/account_screen.dart';
+import 'features/auth/login_screen.dart';
 import 'features/scan/scan_screen.dart';
 import 'features/vehicles/vehicles_screen.dart';
 import 'features/history/history_screen.dart';
@@ -12,15 +17,50 @@ class TallerMobileApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Taller OBD-II',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: Colors.blue,
-        useMaterial3: true,
+    return ChangeNotifierProvider(
+      create: (_) {
+        final auth = AuthService();
+        // Un 401 en cualquier request devuelve la app al login.
+        ApiClient.onUnauthorized = auth.handleUnauthorized;
+        auth.restoreSession();
+        return auth;
+      },
+      child: MaterialApp(
+        title: 'Taller OBD-II',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          colorSchemeSeed: Colors.blue,
+          useMaterial3: true,
+        ),
+        home: const AuthGate(),
       ),
-      home: const MainScreen(),
     );
+  }
+}
+
+/// Decide qué ve el usuario según el estado de la sesión.
+///
+/// Antes la app entraba directo a la pantalla de escaneo sin autenticar, y el
+/// backend tenía que aceptar escaneos anónimos. Ahora ningún escaneo puede
+/// enviarse sin una sesión válida.
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthService>();
+
+    if (auth.loading && !auth.isAuthenticated) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (!auth.isAuthenticated) {
+      return const LoginScreen();
+    }
+
+    return const MainScreen();
   }
 }
 
@@ -38,6 +78,7 @@ class _MainScreenState extends State<MainScreen> {
     ScanScreen(),
     VehiclesScreen(),
     HistoryScreen(),
+    AccountScreen(),
   ];
 
   @override
@@ -66,6 +107,11 @@ class _MainScreenState extends State<MainScreen> {
             icon: Icon(Icons.history),
             selectedIcon: Icon(Icons.history, color: Colors.blue),
             label: 'Historial',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person, color: Colors.blue),
+            label: 'Cuenta',
           ),
         ],
       ),
