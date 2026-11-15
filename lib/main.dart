@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/api/api_client.dart';
 import 'core/auth/auth_service.dart';
+import 'core/push/push_service.dart';
 import 'features/auth/account_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/scan/scan_screen.dart';
@@ -27,6 +28,9 @@ class TallerMobileApp extends StatelessWidget {
       },
       child: MaterialApp(
         title: 'Taller OBD-II',
+        // Las notificaciones push navegan y avisan desde fuera de los widgets.
+        navigatorKey: PushService.navigatorKey,
+        scaffoldMessengerKey: PushService.messengerKey,
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorSchemeSeed: Colors.blue,

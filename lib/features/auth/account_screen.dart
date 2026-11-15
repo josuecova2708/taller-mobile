@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/auth/auth_service.dart';
+import '../../core/push/push_service.dart';
 
 /// Muestra la identidad y los permisos efectivos de la sesión, y permite salir.
 class AccountScreen extends StatelessWidget {
@@ -68,6 +69,18 @@ class AccountScreen extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 16),
+          Text(
+            'NOTIFICACIONES',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey.shade600,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _NotificationsCard(push: auth.push, receivesAlerts: auth.can('order:read')),
           const SizedBox(height: 16),
           Text(
             'PERMISOS EFECTIVOS',
@@ -140,5 +153,73 @@ class AccountScreen extends StatelessWidget {
     if (confirmed == true) {
       await auth.logout();
     }
+  }
+}
+
+/// Estado de las notificaciones push en este teléfono y botón de prueba.
+class _NotificationsCard extends StatefulWidget {
+  const _NotificationsCard({required this.push, required this.receivesAlerts});
+
+  final PushService push;
+
+  /// Solo quienes pueden ver órdenes reciben el aviso de una orden nueva.
+  final bool receivesAlerts;
+
+  @override
+  State<_NotificationsCard> createState() => _NotificationsCardState();
+}
+
+class _NotificationsCardState extends State<_NotificationsCard> {
+  bool _sending = false;
+
+  Future<void> _sendTest() async {
+    setState(() => _sending = true);
+    final message = await widget.push.sendTest();
+    if (!mounted) return;
+    setState(() => _sending = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ValueListenableBuilder<PushStatus>(
+        valueListenable: widget.push.status,
+        builder: (context, status, _) {
+          final active = status == PushStatus.activo;
+          final text = active && !widget.receivesAlerts
+              ? 'Notificaciones activas. Los avisos de órdenes de trabajo '
+                  'llegan a mecánicos y administradores.'
+              : PushService.describe(status);
+
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      active
+                          ? Icons.notifications_active_outlined
+                          : Icons.notifications_off_outlined,
+                      color: active ? Colors.green.shade700 : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(text)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: _sending ? null : _sendTest,
+                  child: Text(_sending ? 'Enviando…' : 'Enviar notificación de prueba'),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 }

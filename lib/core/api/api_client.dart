@@ -22,8 +22,13 @@ class ApiClient {
   static const String _tokenKey = 'jwt_token';
   static const String _userKey = 'auth_user';
 
-  // En emulador Android 10.0.2.2 apunta al localhost de la PC; en web/Windows localhost
-  static const String defaultBaseUrl = 'http://10.0.2.2:3000/api';
+  // En emulador Android 10.0.2.2 apunta al localhost de la PC; en web/Windows localhost.
+  // El APK de producción fija la URL al compilar:
+  //   flutter build apk --dart-define=API_BASE_URL=https://<backend>/api
+  static const String defaultBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://10.0.2.2:3000/api',
+  );
 
   /// Se invoca cuando el backend responde 401: la app debe volver al login.
   static void Function()? onUnauthorized;
@@ -169,7 +174,44 @@ class ApiClient {
     _fail(response);
   }
 
+  Future<dynamic> _post(String path, [Map<String, dynamic>? body]) async {
+    final baseUrl = await getBaseUrl();
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl$path'),
+          headers: await _headers(),
+          body: jsonEncode(body ?? const {}),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return jsonDecode(response.body);
+    }
+    _fail(response);
+  }
+
+  // ---------------------------------------------------------------- push
+
+  /// Registra este teléfono para recibir notificaciones push (CU18).
+  Future<void> registerDevice(String token) async {
+    await _post('/devices', {'token': token, 'platform': 'android'});
+  }
+
+  /// Al cerrar sesión, el teléfono deja de recibir avisos de esta cuenta.
+  Future<void> unregisterDevice(String token) async {
+    await _post('/devices/unregister', {'token': token});
+  }
+
+  /// Pide un push de prueba para los teléfonos del usuario.
+  Future<Map<String, dynamic>> sendTestPush() async {
+    return await _post('/devices/test') as Map<String, dynamic>;
+  }
+
   // ---------------------------------------------------------------- recursos
+
+  Future<Map<String, dynamic>> getWorkOrder(String id) async {
+    return await _get('/work-orders/$id') as Map<String, dynamic>;
+  }
 
   Future<List<dynamic>> getVehicles() async {
     return await _get('/vehicles') as List<dynamic>;

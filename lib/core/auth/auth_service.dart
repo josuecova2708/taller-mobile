@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import '../api/api_client.dart';
+import '../push/push_service.dart';
 
 /// Estado de sesión de la app.
 ///
@@ -8,7 +11,12 @@ import '../api/api_client.dart';
 class AuthService extends ChangeNotifier {
   final ApiClient _apiClient;
 
-  AuthService({ApiClient? apiClient}) : _apiClient = apiClient ?? ApiClient();
+  /// Notificaciones push: se activan con la sesión y se apagan al salir.
+  final PushService push;
+
+  AuthService({ApiClient? apiClient, PushService? pushService})
+      : _apiClient = apiClient ?? ApiClient(),
+        push = pushService ?? PushService(apiClient: apiClient);
 
   Map<String, dynamic>? _user;
   bool _loading = true;
@@ -47,6 +55,8 @@ class AuthService extends ChangeNotifier {
     // ...y luego se confirma con el backend. Si el token venció, se cierra.
     try {
       _user = await _apiClient.fetchProfile();
+      // En segundo plano: registrar el teléfono no debe demorar la entrada.
+      unawaited(push.start());
     } on ApiException catch (e) {
       if (e.isUnauthorized) {
         await _apiClient.clearSession();
@@ -66,6 +76,7 @@ class AuthService extends ChangeNotifier {
 
     try {
       _user = await _apiClient.login(email, password);
+      unawaited(push.start());
       return true;
     } on ApiException catch (e) {
       _error = e.message;
@@ -78,6 +89,8 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // Antes de borrar la sesión: quitar el teléfono requiere el token.
+    await push.stop();
     await _apiClient.clearSession();
     _user = null;
     _error = null;

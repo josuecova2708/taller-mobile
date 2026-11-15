@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "136450819245",
+    "project_id": "taller-obd",
+    "storage_bucket": "taller-obd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:136450819245:android:1960ba2285a49da9617224",
+        "android_client_info": {
+          "package_name": "com.uagrm.taller.taller_mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAiL_ElXzVQ0pRKx13lXO2Vjyt65sMXW38"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -114,10 +114,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               'Monitores OBD: ${monitorsOk ? "Completos" : "Incompletos"} · Voltaje: ${s['batteryVoltage'] ?? "N/A"}V',
                               style: const TextStyle(fontSize: 12, color: Colors.black54),
                             ),
-                            if (s['notes'] != null) ...[
+                            if ((s['rationale'] ?? s['notes']) != null) ...[
                               const SizedBox(height: 6),
                               Text(
-                                '${s['notes']}',
+                                '${s['rationale'] ?? s['notes']}',
                                 style: const TextStyle(fontSize: 12),
                               ),
                             ],

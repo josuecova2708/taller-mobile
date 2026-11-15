@@ -44,28 +44,62 @@ class _ScanScreenState extends State<ScanScreen> {
     try {
       final list = await _apiClient.getVehicles();
       if (mounted) {
-        setState(() {
-          _vehicles = list;
-          if (_vehicles.isNotEmpty && _selectedVehicleId == null) {
-            _selectedVehicleId = _vehicles.first['id'] as String?;
-          }
-        });
+        // No se preselecciona ningún vehículo: elegir el primero de la lista
+        // por defecto hacía fácil registrar el escaneo en el vehículo
+        // equivocado. Lo decide el VIN leído o el inspector.
+        setState(() => _vehicles = list);
       }
     } catch (_) {
       // Si el backend no está corriendo aún, permite escanear por VIN igualmente
     }
   }
 
+  @override
+  void dispose() {
+    _bluetoothService.disconnect();
+    _notesController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadPairedDevices() async {
-    final devices = await _bluetoothService.getPairedDevices();
-    if (mounted) {
+    try {
+      final devices = await _bluetoothService.getPairedDevices();
+      if (!mounted) return;
       setState(() {
         _pairedDevices = devices;
         if (_pairedDevices.isNotEmpty && _selectedDevice == null) {
           _selectedDevice = _pairedDevices.first;
         }
+        if (devices.isEmpty) {
+          _statusMessage =
+              'No hay adaptadores vinculados. Vincule el ELM327 en los ajustes de Bluetooth del teléfono.';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _pairedDevices = [];
+        _statusMessage = '$e';
       });
     }
+  }
+
+  /// Vehículo registrado cuyo VIN coincide con el que reportó la ECU.
+  String? _vehicleIdForVin(String? vin) {
+    if (vin == null || vin.isEmpty) return null;
+    for (final v in _vehicles) {
+      final registrado = (v['vin'] as String?)?.trim().toUpperCase();
+      if (registrado != null && registrado == vin.toUpperCase()) {
+        return v['id'] as String?;
+      }
+    }
+    return null;
+  }
+
+  bool get _canSend {
+    final result = _lastResult;
+    if (result == null || !result.isComplete) return false;
+    return _selectedVehicleId != null || (result.vin?.isNotEmpty ?? false);
   }
 
   Future<void> _startScan() async {
@@ -90,7 +124,14 @@ class _ScanScreenState extends State<ScanScreen> {
           _statusMessage = 'Conectando por Bluetooth SPP a ${_selectedDevice!.name}...';
         });
         await _bluetoothService.connect(_selectedDevice!.address);
-        sender = _bluetoothService.sendCommand;
+        // El reinicio del adaptador y la primera consulta OBD (cuando busca
+        // el protocolo, "SEARCHING...") tardan bastante más que el resto.
+        sender = (command) => _bluetoothService.sendCommand(
+              command,
+              timeout: command == 'ATZ' || command == '0100'
+                  ? const Duration(seconds: 12)
+                  : const Duration(seconds: 5),
+            );
       }
 
       final result = await _elm327Service.runFullScan(
@@ -103,12 +144,29 @@ class _ScanScreenState extends State<ScanScreen> {
       );
 
       if (mounted) {
+        final porVin = _vehicleIdForVin(result.vin);
         setState(() {
           _lastResult = result;
-          _statusMessage =
-              'Lectura completada: ${result.dtcs.length} código(s) DTC leídos.';
+          // El VIN que reporta la ECU manda sobre la selección manual.
+          if (porVin != null) _selectedVehicleId = porVin;
+
+          if (!result.isComplete) {
+            _statusMessage =
+                'Lectura incompleta: no se puede registrar este escaneo.';
+          } else if (porVin != null) {
+            _statusMessage =
+                'Lectura completada: ${result.dtcs.length} código(s). Vehículo identificado por su VIN.';
+          } else if (_selectedVehicleId == null) {
+            _statusMessage =
+                'Lectura completada: ${result.dtcs.length} código(s). Seleccione el vehículo antes de enviar.';
+          } else {
+            _statusMessage =
+                'Lectura completada: ${result.dtcs.length} código(s) DTC leídos.';
+          }
         });
       }
+    } on ObdCommunicationException catch (e) {
+      if (mounted) setState(() => _statusMessage = e.message);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -116,6 +174,9 @@ class _ScanScreenState extends State<ScanScreen> {
         });
       }
     } finally {
+      // Se libera el adaptador al terminar: dejar el canal abierto impide
+      // reconectar y agota la batería del vehículo con el contacto puesto.
+      if (!_useSimulator) await _bluetoothService.disconnect();
       if (mounted) {
         setState(() => _isScanning = false);
       }
@@ -123,7 +184,7 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   Future<void> _sendToBackend() async {
-    if (_lastResult == null) return;
+    if (!_canSend) return;
     setState(() {
       _isSending = true;
       _statusMessage = 'Enviando lectura al backend NestJS (/api/scans)...';
@@ -316,7 +377,11 @@ class _ScanScreenState extends State<ScanScreen> {
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: DropdownButtonFormField<String>(
+                    // La clave fuerza a redibujar cuando el VIN leído cambia la
+                    // selección: `initialValue` solo se lee al crear el campo.
+                    key: ValueKey(_selectedVehicleId),
                     initialValue: _selectedVehicleId,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Vehículo objetivo (o detección automática por VIN)',
                       border: OutlineInputBorder(),
@@ -398,13 +463,61 @@ class _ScanScreenState extends State<ScanScreen> {
                             ? 'Completos'
                             : 'Incompletos (${_lastResult!.readiness.incompleteMonitors.join(", ")})',
                       ),
+                      if (!_lastResult!.isComplete) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            border: Border.all(color: Colors.red.shade300),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'No se pudo leer:',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.red,
+                                ),
+                              ),
+                              ..._lastResult!.readErrors.map(
+                                (e) => Text('• $e', style: const TextStyle(fontSize: 13)),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                'Que no aparezcan códigos NO significa que el '
+                                'vehículo esté sano. Revise el adaptador y '
+                                'vuelva a escanear.',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      ..._lastResult!.warnings.map(
+                        (w) => Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            'ⓘ $w',
+                            style: const TextStyle(fontSize: 12, color: Colors.black54),
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 12),
                       Text(
                         'Códigos DTC Detectados (${_lastResult!.dtcs.length}):',
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 6),
-                      if (_lastResult!.dtcs.isEmpty)
+                      if (!_lastResult!.isComplete && _lastResult!.dtcs.isEmpty)
+                        const Text(
+                          'Sin datos: la lectura no se completó.',
+                          style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
+                        )
+                      else if (_lastResult!.dtcs.isEmpty)
                         const Text(
                           '✅ Sin códigos de falla en Modos 03 / 07 / 0A',
                           style: TextStyle(color: Colors.green, fontWeight: FontWeight.w600),
@@ -440,7 +553,7 @@ class _ScanScreenState extends State<ScanScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: FilledButton.tonalIcon(
-                          onPressed: _isSending ? null : _sendToBackend,
+                          onPressed: _isSending || !_canSend ? null : _sendToBackend,
                           icon: const Icon(Icons.cloud_upload),
                           label: Text(
                             _isSending
