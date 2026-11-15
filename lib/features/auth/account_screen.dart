@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/auth/auth_service.dart';
 import '../../core/push/push_service.dart';
+import '../legal/legal_screen.dart';
 
 /// Muestra la identidad y los permisos efectivos de la sesión, y permite salir.
 class AccountScreen extends StatelessWidget {
@@ -110,6 +111,27 @@ class AccountScreen extends StatelessWidget {
                     ),
                   )
                   .toList(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: const Text('Política de privacidad'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      LegalScreen.open(context, const LegalScreen.privacy()),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.description_outlined),
+                  title: const Text('Términos de uso'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => LegalScreen.open(context, const LegalScreen.terms()),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 24),

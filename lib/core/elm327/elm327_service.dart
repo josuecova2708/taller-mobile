@@ -292,6 +292,34 @@ class Elm327Service {
     return null;
   }
 
+  /// Bytes de datos con los que la ECU respondió a un PID del Modo 01, sin la
+  /// cabecera `41 XX`. Devuelve null si no hay una respuesta válida (el
+  /// vehículo no soporta el PID o la lectura falló). Lo usa el monitor en vivo.
+  List<int>? parsePidData(String raw, int pid) {
+    final cabecera = ['41', pid.toRadixString(16).toUpperCase().padLeft(2, '0')];
+    for (final frame in _frames(raw)) {
+      if (!_empiezaCon(frame, cabecera) || frame.length <= 2) continue;
+      return [for (final b in frame.sublist(2)) int.parse(b, radix: 16)];
+    }
+    return null;
+  }
+
+  /// PID del Modo 01 (del 01 al 20) que el vehículo declara soportar en su
+  /// respuesta a `0100`. Si responden varias ECU, se suman.
+  Set<int> parseSupportedPids(String raw0100) {
+    final soportados = <int>{};
+    for (final frame in _frames(raw0100)) {
+      if (!_empiezaCon(frame, const ['41', '00']) || frame.length < 6) continue;
+      for (var i = 0; i < 4; i++) {
+        final byte = int.parse(frame[2 + i], radix: 16);
+        for (var bit = 0; bit < 8; bit++) {
+          if (byte & (0x80 >> bit) != 0) soportados.add(i * 8 + bit + 1);
+        }
+      }
+    }
+    return soportados;
+  }
+
   /// Decodifica el VIN (Modo 09 PID 02) desde bytes hexadecimales ASCII
   String? parseVin(String raw) {
     final cleaned = raw

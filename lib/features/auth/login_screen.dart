@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/api/api_client.dart';
 import '../../core/auth/auth_service.dart';
+import '../legal/legal_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -166,6 +167,28 @@ class _LoginScreenState extends State<LoginScreen> {
                       size: 18,
                     ),
                     label: const Text('Configuración del servidor'),
+                  ),
+
+                  const SizedBox(height: 4),
+                  Text(
+                    'Al iniciar sesión acepta los términos de uso y la política de privacidad.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    children: [
+                      TextButton(
+                        onPressed: () =>
+                            LegalScreen.open(context, const LegalScreen.terms()),
+                        child: const Text('Términos de uso'),
+                      ),
+                      TextButton(
+                        onPressed: () =>
+                            LegalScreen.open(context, const LegalScreen.privacy()),
+                        child: const Text('Política de privacidad'),
+                      ),
+                    ],
                   ),
 
                   if (_showServerConfig) ...[

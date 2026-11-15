@@ -4,6 +4,7 @@ import '../../core/api/api_client.dart';
 import '../../core/bluetooth/bluetooth_service.dart';
 import '../../core/elm327/elm327_service.dart';
 import '../../simulator/mock_elm327.dart';
+import '../monitor/live_monitor_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -181,6 +182,30 @@ class _ScanScreenState extends State<ScanScreen> {
         setState(() => _isScanning = false);
       }
     }
+  }
+
+  /// Abre el monitor en vivo (CU09) con la misma fuente elegida para el
+  /// escaneo: el simulador o el adaptador Bluetooth seleccionado.
+  void _openLiveMonitor() {
+    if (!_useSimulator && _selectedDevice == null) {
+      setState(() {
+        _statusMessage =
+            'Selecciona primero un dispositivo Bluetooth ELM327 vinculado.';
+      });
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _useSimulator
+            ? LiveMonitorScreen.simulator()
+            : LiveMonitorScreen.bluetooth(
+                bluetooth: _bluetoothService,
+                deviceAddress: _selectedDevice!.address,
+                deviceName: _selectedDevice!.name ?? 'ELM327',
+              ),
+      ),
+    );
   }
 
   Future<void> _sendToBackend() async {
@@ -421,6 +446,15 @@ class _ScanScreenState extends State<ScanScreen> {
                   _isScanning ? 'Escaneando ECU...' : 'Iniciar Escaneo',
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _isScanning ? null : _openLiveMonitor,
+              icon: const Icon(Icons.speed),
+              label: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Text('Monitor en vivo'),
               ),
             ),
             const SizedBox(height: 10),
