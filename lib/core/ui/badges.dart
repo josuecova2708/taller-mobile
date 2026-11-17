@@ -10,7 +10,8 @@ enum BadgeTone { neutral, ok, warn, severe, critical, brand, brandSolid }
 
 /// Etiqueta de estado. Siempre lleva texto: el color nunca informa solo.
 class StatusBadge extends StatelessWidget {
-  const StatusBadge(this.label, {super.key, required this.tone, this.dot = false});
+  const StatusBadge(this.label,
+      {super.key, required this.tone, this.dot = false});
 
   final String label;
   final BadgeTone tone;
@@ -43,7 +44,8 @@ class StatusBadge extends StatelessWidget {
             Container(
               width: 6,
               height: 6,
-              decoration: BoxDecoration(color: foreground, shape: BoxShape.circle),
+              decoration:
+                  BoxDecoration(color: foreground, shape: BoxShape.circle),
             ),
             const SizedBox(width: 6),
           ],
@@ -131,6 +133,23 @@ class OrderStatusBadge extends StatelessWidget {
       'COMPLETED' => ('Completada', BadgeTone.ok),
       'CANCELLED' => ('Cancelada', BadgeTone.neutral),
       _ => ('Abierta', BadgeTone.brand),
+    };
+    return StatusBadge(label, tone: tone);
+  }
+}
+
+/// Confianza de una causa probable de la hipótesis de IA.
+class ConfidenceBadge extends StatelessWidget {
+  const ConfidenceBadge(this.confidence, {super.key});
+
+  final String? confidence;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, tone) = switch (confidence) {
+      'ALTA' => ('Confianza alta', BadgeTone.brandSolid),
+      'MEDIA' => ('Confianza media', BadgeTone.brand),
+      _ => ('Confianza baja', BadgeTone.neutral),
     };
     return StatusBadge(label, tone: tone);
   }

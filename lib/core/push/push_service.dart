@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../../features/alerts/work_order_detail_screen.dart';
+import '../../features/history/scan_detail_screen.dart';
 
 /// Estado de las notificaciones en este teléfono, para mostrarlo en «Cuenta».
 enum PushStatus {
@@ -121,7 +122,7 @@ class PushService {
   static String describe(PushStatus status) {
     switch (status) {
       case PushStatus.activo:
-        return 'Este teléfono recibe los avisos de órdenes de trabajo.';
+        return 'Este teléfono recibe los avisos de órdenes de trabajo y de sus vehículos.';
       case PushStatus.sinPermiso:
         return 'Las notificaciones están bloqueadas. Actívelas en los ajustes de Android para esta aplicación.';
       case PushStatus.noDisponible:
@@ -165,7 +166,7 @@ class PushService {
     final notification = message.notification;
     if (messenger == null || notification == null) return;
 
-    final orderId = message.data['workOrderId'] as String?;
+    final canOpen = _routeFor(message) != null;
     messenger.showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 8),
@@ -186,22 +187,36 @@ class PushService {
               ),
           ],
         ),
-        action: orderId == null
-            ? null
-            : SnackBarAction(label: 'Ver', onPressed: () => _open(message)),
+        action: canOpen
+            ? SnackBarAction(label: 'Ver', onPressed: () => _open(message))
+            : null,
       ),
     );
   }
 
-  void _open(RemoteMessage message) {
+  /// Pantalla que abre cada aviso:
+  /// - orden nueva (mecánicos y administradores) → detalle de la orden;
+  /// - aviso al responsable u orden cerrada → detalle del escaneo, porque el
+  ///   inspector no puede ver órdenes.
+  static Widget Function()? _routeFor(RemoteMessage message) {
     final orderId = message.data['workOrderId'] as String?;
-    if (orderId == null || orderId.isEmpty) return;
+    if (orderId != null && orderId.isNotEmpty) {
+      return () => WorkOrderDetailScreen(workOrderId: orderId);
+    }
+    final scanId = message.data['scanId'] as String?;
+    if (scanId != null && scanId.isNotEmpty) {
+      return () => ScanDetailScreen(scanId: scanId);
+    }
+    return null;
+  }
+
+  void _open(RemoteMessage message) {
+    final route = _routeFor(message);
+    if (route == null) return;
 
     void push() {
       navigatorKey.currentState?.push(
-        MaterialPageRoute<void>(
-          builder: (_) => WorkOrderDetailScreen(workOrderId: orderId),
-        ),
+        MaterialPageRoute<void>(builder: (_) => route()),
       );
     }
 

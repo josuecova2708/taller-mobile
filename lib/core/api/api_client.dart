@@ -79,7 +79,9 @@ class ApiClient {
     final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
     if (clean.isEmpty) return '';
     final uri = Uri.tryParse(clean);
-    if (uri != null && uri.hasAuthority && uri.path.isEmpty) return '$clean/api';
+    if (uri != null && uri.hasAuthority && uri.path.isEmpty) {
+      return '$clean/api';
+    }
     return clean;
   }
 
@@ -131,7 +133,8 @@ class ApiClient {
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
-        _extractMessage(response.body) ?? 'No se pudo iniciar sesión. Intente de nuevo.',
+        _extractMessage(response.body) ??
+            'No se pudo iniciar sesión. Intente de nuevo.',
         statusCode: response.statusCode,
       );
     }
@@ -141,7 +144,8 @@ class ApiClient {
     final user = data['user'] as Map<String, dynamic>?;
 
     if (token == null || user == null) {
-      throw ApiException('El servidor respondió algo inesperado. Intente de nuevo.');
+      throw ApiException(
+          'El servidor respondió algo inesperado. Intente de nuevo.');
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -195,7 +199,8 @@ class ApiClient {
     }
     if (response.statusCode == 403) {
       throw ApiException(
-        _extractMessage(response.body) ?? 'Su rol no tiene permiso para esta operación.',
+        _extractMessage(response.body) ??
+            'Su rol no tiene permiso para esta operación.',
         statusCode: 403,
       );
     }
@@ -236,6 +241,23 @@ class ApiClient {
     _fail(response);
   }
 
+  Future<dynamic> _patch(String path, Map<String, dynamic> body) async {
+    final baseUrl = await getBaseUrl();
+    final headers = await _headers();
+    final response = await _send(
+      () => http.patch(
+        Uri.parse('$baseUrl$path'),
+        headers: headers,
+        body: jsonEncode(body),
+      ),
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return jsonDecode(response.body);
+    }
+    _fail(response);
+  }
+
   // ---------------------------------------------------------------- push
 
   /// Registra este teléfono para recibir notificaciones push (CU18).
@@ -253,21 +275,84 @@ class ApiClient {
     return await _post('/devices/test') as Map<String, dynamic>;
   }
 
-  // ---------------------------------------------------------------- recursos
+  // ---------------------------------------------------------------- vehículos
 
-  Future<Map<String, dynamic>> getWorkOrder(String id) async {
-    return await _get('/work-orders/$id') as Map<String, dynamic>;
+  /// Flota activa. Con [mine], solo los vehículos de los que el usuario es
+  /// responsable.
+  Future<List<dynamic>> getVehicles({bool mine = false}) async {
+    return await _get(mine ? '/vehicles?mine=true' : '/vehicles')
+        as List<dynamic>;
   }
 
-  Future<List<dynamic>> getVehicles() async {
-    return await _get('/vehicles') as List<dynamic>;
-  }
+  // ---------------------------------------------------------------- escaneos
 
   Future<List<dynamic>> getScans() async {
     return await _get('/scans') as List<dynamic>;
   }
 
+  Future<Map<String, dynamic>> getScan(String id) async {
+    return await _get('/scans/$id') as Map<String, dynamic>;
+  }
+
+  /// Hipótesis de IA de un escaneo.
+  ///
+  /// Devuelve `null` mientras se está generando: el backend responde 404 con
+  /// «todavía se está generando», y eso es una espera, no un error. Cualquier
+  /// otro error (incluido el 404 de «no requiere evaluación») se propaga.
+  Future<Map<String, dynamic>?> getDiagnosis(String scanId) async {
+    try {
+      return await _get('/scans/$scanId/diagnosis') as Map<String, dynamic>;
+    } on ApiException catch (e) {
+      if (esHipotesisEnCurso(e)) return null;
+      rethrow;
+    }
+  }
+
+  /// El 404 de la hipótesis significa «todavía no llegó».
+  static bool esHipotesisEnCurso(ApiException e) =>
+      e.statusCode == 404 && e.message.contains('generando');
+
   Future<Map<String, dynamic>> submitScan(Map<String, dynamic> payload) async {
     return await _post('/scans', payload) as Map<String, dynamic>;
+  }
+
+  // ---------------------------------------------------------------- órdenes
+
+  Future<List<dynamic>> getWorkOrders() async {
+    return await _get('/work-orders') as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getWorkOrder(String id) async {
+    return await _get('/work-orders/$id') as Map<String, dynamic>;
+  }
+
+  /// El mecánico toma una orden sin asignar. Si otro la tomó antes, el
+  /// backend responde 409 con su nombre.
+  Future<Map<String, dynamic>> takeWorkOrder(String id) async {
+    return await _post('/work-orders/$id/take') as Map<String, dynamic>;
+  }
+
+  /// Registra el avance y, si hay, una nota que se agrega al historial.
+  Future<Map<String, dynamic>> advanceWorkOrder(
+    String id,
+    String status, {
+    String? notes,
+  }) async {
+    return await _patch('/work-orders/$id/status', {
+      'status': status,
+      if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+    }) as Map<String, dynamic>;
+  }
+
+  /// Cierra la orden como `COMPLETED` o `CANCELLED`, con justificación.
+  Future<Map<String, dynamic>> closeWorkOrder(
+    String id,
+    String status,
+    String resolution,
+  ) async {
+    return await _post('/work-orders/$id/close', {
+      'status': status,
+      'resolution': resolution.trim(),
+    }) as Map<String, dynamic>;
   }
 }

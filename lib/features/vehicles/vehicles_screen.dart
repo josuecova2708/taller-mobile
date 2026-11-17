@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/ui/badges.dart';
 import '../../core/ui/format.dart';
@@ -85,14 +87,76 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
       );
     }
 
-    return ListView.separated(
+    final auth = context.watch<AuthService>();
+    final vehicles = _vehicles.whereType<Map<String, dynamic>>().toList();
+
+    // El inspector ve primero los vehículos de los que es responsable.
+    if (auth.user?['role'] == 'INSPECTOR') {
+      final (mine, others) =
+          separarPorResponsable(vehicles, auth.user?['id'] as String?);
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        children: [
+          _SectionTitle('Mis vehículos (${mine.length})'),
+          if (mine.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 10),
+              child: Text(
+                'Todavía no es responsable de ningún vehículo. Lo asigna el administrador.',
+                style: TextStyle(fontSize: 14, color: AppColors.ink2),
+              ),
+            ),
+          for (final v in mine) _VehicleCard(v),
+          if (others.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _SectionTitle('Resto de la flota (${others.length})'),
+            for (final v in others) _VehicleCard(v),
+          ],
+        ],
+      );
+    }
+
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
-      itemCount: _vehicles.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        return _VehicleCard(_vehicles[index] as Map<String, dynamic>);
-      },
+      children: [for (final v in vehicles) _VehicleCard(v)],
+    );
+  }
+}
+
+/// Separa los vehículos de los que [userId] es responsable del resto,
+/// conservando el orden original.
+(List<Map<String, dynamic>>, List<Map<String, dynamic>>) separarPorResponsable(
+  List<Map<String, dynamic>> vehicles,
+  String? userId,
+) {
+  bool esMio(Map<String, dynamic> v) =>
+      userId != null &&
+      (v['responsible'] as Map<String, dynamic>?)?['id'] == userId;
+  return (
+    vehicles.where(esMio).toList(),
+    vehicles.where((v) => !esMio(v)).toList(),
+  );
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+          color: AppColors.ink,
+        ),
+      ),
     );
   }
 }
@@ -107,9 +171,13 @@ class _VehicleCard extends StatelessWidget {
     final alias = (vehicle['alias'] as String?)?.trim() ?? '';
     final description = descripcionVehiculo(vehicle);
     final vin = (vehicle['vin'] as String?)?.trim() ?? '';
-    final subtitle = [alias, description].where((t) => t.isNotEmpty).join(' · ');
+    final subtitle =
+        [alias, description].where((t) => t.isNotEmpty).join(' · ');
+    final responsible =
+        (vehicle['responsible'] as Map<String, dynamic>?)?['name'] as String?;
 
     return Card(
+      margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -152,6 +220,11 @@ class _VehicleCard extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Responsable: ${responsible ?? 'sin asignar'}',
+              style: const TextStyle(fontSize: 12, color: AppColors.ink3),
             ),
           ],
         ),

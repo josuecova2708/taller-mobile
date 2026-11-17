@@ -4,6 +4,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/ui/badges.dart';
 import '../../core/ui/format.dart';
 import '../../core/ui/panel.dart';
+import 'scan_detail_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -106,7 +107,8 @@ class _ScanCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final vehicle = scan['vehicle'] as Map<String, dynamic>? ?? const {};
     final dtcs = (scan['dtcEntries'] as List<dynamic>?) ?? const [];
-    final readiness = scan['readinessStatus'] as Map<String, dynamic>? ?? const {};
+    final readiness =
+        scan['readinessStatus'] as Map<String, dynamic>? ?? const {};
     final monitorsOk = readiness['monitorsCompleted'] != false;
     final voltage = scan['batteryVoltage'];
     final text = (scan['rationale'] ?? scan['notes'])?.toString().trim() ?? '';
@@ -118,67 +120,94 @@ class _ScanCard extends StatelessWidget {
       if (voltage is num) '${voltage.toStringAsFixed(1)} V',
     ].join(' · ');
 
+    final scanId = scan['id'] as String?;
+    final hasDiagnosis = scan['diagnosis'] != null;
+
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '${vehicle['plate'] ?? 'Vehículo'}',
-                    style: AppText.code.copyWith(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.ink,
-                    ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: scanId == null
+            ? null
+            : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ScanDetailScreen(scanId: scanId),
                   ),
                 ),
-                const SizedBox(width: 8),
-                SeverityBadge(scan['severity'] as String?),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              [
-                if (description.isNotEmpty) description,
-                fechaHora(scan['scannedAt'] as String?),
-              ].join(' · '),
-              style: const TextStyle(fontSize: 13, color: AppColors.ink2),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              details,
-              style: AppText.nums.copyWith(fontSize: 13, color: AppColors.ink3),
-            ),
-            if (dtcs.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 10,
-                runSpacing: 4,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  for (final dtc in dtcs)
-                    Text(
-                      '${(dtc as Map<String, dynamic>)['code']}',
+                  Expanded(
+                    child: Text(
+                      '${vehicle['plate'] ?? 'Vehículo'}',
                       style: AppText.code.copyWith(
-                        fontSize: 13,
+                        fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: AppColors.ink,
                       ),
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  SeverityBadge(scan['severity'] as String?),
                 ],
               ),
-            ],
-            if (text.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                [
+                  if (description.isNotEmpty) description,
+                  fechaHora(scan['scannedAt'] as String?),
+                ].join(' · '),
+                style: const TextStyle(fontSize: 13, color: AppColors.ink2),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                details,
+                style:
+                    AppText.nums.copyWith(fontSize: 13, color: AppColors.ink3),
+              ),
+              if (dtcs.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 4,
+                  children: [
+                    for (final dtc in dtcs)
+                      Text(
+                        '${(dtc as Map<String, dynamic>)['code']}',
+                        style: AppText.code.copyWith(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+              if (text.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  text,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, height: 1.4),
+                ),
+              ],
               const SizedBox(height: 8),
               Text(
-                text,
-                style: const TextStyle(fontSize: 13, height: 1.4),
+                hasDiagnosis
+                    ? 'Con hipótesis de IA · Ver detalle'
+                    : 'Ver detalle',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.navy,
+                ),
               ),
             ],
-          ],
+          ),
         ),
       ),
     );

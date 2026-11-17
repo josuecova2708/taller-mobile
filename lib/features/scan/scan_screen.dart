@@ -1,6 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial_plus/flutter_bluetooth_serial_plus.dart';
+import 'package:provider/provider.dart';
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth_service.dart';
+import '../../core/ui/hipotesis.dart';
+import '../history/scan_detail_screen.dart';
 import '../../core/bluetooth/bluetooth_service.dart';
 import '../../core/elm327/elm327_service.dart';
 import '../../core/theme/app_theme.dart';
@@ -48,6 +54,18 @@ class _ScanScreenState extends State<ScanScreen> {
   /// El servidor está generando la hipótesis de IA del escaneo enviado.
   bool _aiRequested = false;
 
+  // Hipótesis del escaneo enviado. Se genera en segundo plano (unos 10 a 15
+  // segundos): se consulta cada [_diagnosisInterval] hasta [_maxDiagnosisPolls]
+  // veces, cerca de un minuto.
+  static const _diagnosisInterval = Duration(seconds: 4);
+  static const _maxDiagnosisPolls = 15;
+  String? _sentScanId;
+  Map<String, dynamic>? _diagnosis;
+  Timer? _diagnosisTimer;
+  int _diagnosisPolls = 0;
+  bool _diagnosisTimedOut = false;
+  String? _diagnosisError;
+
   final TextEditingController _notesController = TextEditingController();
 
   @override
@@ -72,9 +90,68 @@ class _ScanScreenState extends State<ScanScreen> {
 
   @override
   void dispose() {
+    _diagnosisTimer?.cancel();
     _bluetoothService.disconnect();
     _notesController.dispose();
     super.dispose();
+  }
+
+  void _resetDiagnosis() {
+    _diagnosisTimer?.cancel();
+    _diagnosisTimer = null;
+    _sentScanId = null;
+    _diagnosis = null;
+    _diagnosisPolls = 0;
+    _diagnosisTimedOut = false;
+    _diagnosisError = null;
+  }
+
+  /// Consulta la hipótesis del escaneo enviado. Mientras el backend responda
+  /// que se está generando, vuelve a intentar; no es un error.
+  Future<void> _pollDiagnosis() async {
+    final scanId = _sentScanId;
+    if (scanId == null) return;
+    try {
+      final diagnosis = await _apiClient.getDiagnosis(scanId);
+      if (!mounted || scanId != _sentScanId) return;
+      if (diagnosis != null) {
+        setState(() => _diagnosis = diagnosis);
+        return;
+      }
+    } on ApiException catch (e) {
+      if (!mounted || scanId != _sentScanId) return;
+      // Sin conexión o servidor arrancando: se reintenta en la próxima vuelta.
+      // Un rol sin permiso o un escaneo que no requiere hipótesis: se deja.
+      if (e.statusCode != null) {
+        setState(() => _diagnosisError = e.message);
+        return;
+      }
+    }
+
+    _diagnosisPolls++;
+    if (_diagnosisPolls >= _maxDiagnosisPolls) {
+      if (mounted) setState(() => _diagnosisTimedOut = true);
+      return;
+    }
+    _diagnosisTimer = Timer(_diagnosisInterval, _pollDiagnosis);
+  }
+
+  /// Vehículos del usuario primero; el resto, en el orden en que llegan.
+  List<Map<String, dynamic>> _vehiclesForPicker() {
+    String? userId;
+    try {
+      userId = context.read<AuthService>().user?['id'] as String?;
+    } catch (_) {
+      userId = null;
+    }
+    final vehicles = _vehicles.whereType<Map<String, dynamic>>().toList();
+    bool esMio(Map<String, dynamic> v) =>
+        userId != null &&
+        (v['responsible'] as Map<String, dynamic>?)?['id'] == userId;
+    return [
+      ...vehicles.where(esMio),
+      ...vehicles.where((v) => !esMio(v)),
+    ];
   }
 
   void _setStatus(String message, [NoticeTone tone = NoticeTone.info]) {
@@ -124,6 +201,72 @@ class _ScanScreenState extends State<ScanScreen> {
     return null;
   }
 
+  /// La hipótesis se muestra a quien tiene `diagnosis:read` (los tres roles).
+  bool get _canReadDiagnosis {
+    try {
+      return context.read<AuthService>().can('diagnosis:read');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Widget _buildDiagnosis() {
+    final diagnosis = _diagnosis;
+    if (diagnosis != null) return HipotesisView(diagnosis: diagnosis);
+
+    if (_diagnosisError != null) {
+      return Text(
+        _diagnosisError!,
+        style: const TextStyle(fontSize: 14, color: AppColors.ink2),
+      );
+    }
+
+    if (_diagnosisTimedOut || _sentScanId == null) {
+      final scanId = _sentScanId;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'La hipótesis está tardando más de lo habitual. El escaneo ya quedó '
+            'guardado: puede verla más tarde en «Historial».',
+            style: TextStyle(fontSize: 14, color: AppColors.ink2),
+          ),
+          if (scanId != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ScanDetailScreen(scanId: scanId),
+                  ),
+                ),
+                child: const Text('Abrir el escaneo'),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
+    return const Row(
+      children: [
+        SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Generando la hipótesis. Aparece aquí en unos segundos.',
+            style: TextStyle(fontSize: 14, color: AppColors.ink2),
+          ),
+        ),
+      ],
+    );
+  }
+
   bool get _canSend {
     final result = _lastResult;
     if (result == null || !result.isComplete || _sent) return false;
@@ -148,6 +291,7 @@ class _ScanScreenState extends State<ScanScreen> {
       _backendEvaluation = null;
       _sent = false;
       _aiRequested = false;
+      _resetDiagnosis();
       _statusTone = NoticeTone.info;
       _statusMessage = 'Iniciando la comunicación con el adaptador…';
     });
@@ -266,15 +410,21 @@ class _ScanScreenState extends State<ScanScreen> {
       final response = await _apiClient.submitScan(payload);
       if (mounted) {
         final diagnosis = response['diagnosis'] as Map<String, dynamic>?;
+        final scan = response['scan'] as Map<String, dynamic>?;
         setState(() {
           _backendEvaluation = response['evaluation'] as Map<String, dynamic>?;
           _aiRequested = diagnosis?['requested'] == true;
           _sent = true;
+          _resetDiagnosis();
+          _sentScanId = scan?['id'] as String?;
           _statusTone = NoticeTone.success;
           _statusMessage = response['workOrderId'] != null
               ? 'Escaneo guardado. Se generó una orden de trabajo.'
               : 'Escaneo guardado.';
         });
+        if (_aiRequested && _sentScanId != null && _canReadDiagnosis) {
+          _diagnosisTimer = Timer(_diagnosisInterval, _pollDiagnosis);
+        }
       }
     } catch (e) {
       // La lectura queda en pantalla: se puede reintentar el envío.
@@ -319,7 +469,8 @@ class _ScanScreenState extends State<ScanScreen> {
                     ),
                   )
                 : const Icon(Icons.sensors),
-            label: Text(_isScanning ? 'Leyendo el vehículo…' : 'Iniciar escaneo'),
+            label:
+                Text(_isScanning ? 'Leyendo el vehículo…' : 'Iniciar escaneo'),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -340,7 +491,8 @@ class _ScanScreenState extends State<ScanScreen> {
             const SizedBox(height: 12),
             Panel(
               title: 'Dictamen',
-              trailing: SeverityBadge(_backendEvaluation!['severity'] as String?),
+              trailing:
+                  SeverityBadge(_backendEvaluation!['severity'] as String?),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -348,16 +500,16 @@ class _ScanScreenState extends State<ScanScreen> {
                     '${_backendEvaluation!['rationale'] ?? ''}',
                     style: const TextStyle(fontSize: 14, height: 1.4),
                   ),
-                  if (_aiRequested) ...[
-                    const SizedBox(height: 12),
-                    Notice.text(
-                      'La hipótesis de la inteligencia artificial se está '
-                      'generando. Podrá verla en la plataforma web, sujeta a '
-                      'validación humana.',
-                    ),
-                  ],
                 ],
               ),
+            ),
+          ],
+
+          if (_aiRequested && _canReadDiagnosis) ...[
+            const SizedBox(height: 12),
+            Panel(
+              title: 'Hipótesis técnica asistida por IA',
+              child: _buildDiagnosis(),
             ),
           ],
         ],
@@ -474,8 +626,8 @@ class _ScanScreenState extends State<ScanScreen> {
             value: null,
             child: Text('Identificar por el VIN leído'),
           ),
-          ..._vehicles.map((v) {
-            final vehicle = v as Map<String, dynamic>;
+          // Los vehículos de los que el usuario es responsable van primero.
+          ..._vehiclesForPicker().map((vehicle) {
             final description = descripcionVehiculo(vehicle);
             return DropdownMenuItem<String>(
               value: vehicle['id'] as String,

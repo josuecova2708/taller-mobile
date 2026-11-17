@@ -9,6 +9,7 @@ import 'features/auth/login_screen.dart';
 import 'features/scan/scan_screen.dart';
 import 'features/vehicles/vehicles_screen.dart';
 import 'features/history/history_screen.dart';
+import 'features/orders/work_orders_screen.dart';
 
 void main() {
   runApp(const TallerMobileApp());
@@ -73,32 +74,75 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
+/// Una pestaña de la navegación principal.
+class _Tab {
+  const _Tab(this.screen, this.destination);
+
+  final Widget screen;
+  final NavigationDestination destination;
+}
+
+/// Pestañas según los permisos del usuario. «Órdenes» solo aparece con
+/// `order:read` (mecánico y administrador): el inspector no la ve.
+List<_Tab> _tabsFor(AuthService auth) => [
+      const _Tab(
+        ScanScreen(),
+        NavigationDestination(icon: Icon(Icons.sensors), label: 'Escanear'),
+      ),
+      const _Tab(
+        VehiclesScreen(),
+        NavigationDestination(
+          icon: Icon(Icons.directions_car_outlined),
+          selectedIcon: Icon(Icons.directions_car),
+          label: 'Vehículos',
+        ),
+      ),
+      if (auth.can('order:read'))
+        const _Tab(
+          WorkOrdersScreen(),
+          NavigationDestination(
+            icon: Icon(Icons.assignment_outlined),
+            selectedIcon: Icon(Icons.assignment),
+            label: 'Órdenes',
+          ),
+        ),
+      const _Tab(
+        HistoryScreen(),
+        NavigationDestination(icon: Icon(Icons.history), label: 'Historial'),
+      ),
+      const _Tab(
+        AccountScreen(),
+        NavigationDestination(
+          icon: Icon(Icons.person_outline),
+          selectedIcon: Icon(Icons.person),
+          label: 'Cuenta',
+        ),
+      ),
+    ];
+
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
 
-  final List<Widget> _screens = const [
-    ScanScreen(),
-    VehiclesScreen(),
-    HistoryScreen(),
-    AccountScreen(),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final tabs = _tabsFor(context.watch<AuthService>());
+    // Si cambian los permisos y desaparece una pestaña, no quedar fuera de rango.
+    final selected = _selectedIndex < tabs.length ? _selectedIndex : 0;
+
     return Scaffold(
       // La pantalla de escaneo se conserva al cambiar de pestaña, para no
       // descartar una lectura que todavía no se envió. Las demás se vuelven a
       // crear al entrar, así muestran datos recientes.
       body: IndexedStack(
-        index: _selectedIndex == 0 ? 0 : 1,
+        index: selected == 0 ? 0 : 1,
         children: [
-          _screens[0],
-          if (_selectedIndex == 0)
+          tabs[0].screen,
+          if (selected == 0)
             const SizedBox.shrink()
           else
             KeyedSubtree(
-              key: ValueKey(_selectedIndex),
-              child: _screens[_selectedIndex],
+              key: ValueKey(tabs[selected].destination.label),
+              child: tabs[selected].screen,
             ),
         ],
       ),
@@ -107,30 +151,11 @@ class _MainScreenState extends State<MainScreen> {
           border: Border(top: BorderSide(color: AppColors.line)),
         ),
         child: NavigationBar(
-          selectedIndex: _selectedIndex,
+          selectedIndex: selected,
           onDestinationSelected: (index) {
             setState(() => _selectedIndex = index);
           },
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.sensors),
-              label: 'Escanear',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.directions_car_outlined),
-              selectedIcon: Icon(Icons.directions_car),
-              label: 'Vehículos',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.history),
-              label: 'Historial',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.person_outline),
-              selectedIcon: Icon(Icons.person),
-              label: 'Cuenta',
-            ),
-          ],
+          destinations: [for (final tab in tabs) tab.destination],
         ),
       ),
     );
