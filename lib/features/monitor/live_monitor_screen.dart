@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../core/bluetooth/bluetooth_service.dart';
 import '../../core/elm327/elm327_service.dart';
 import '../../core/elm327/live_monitor.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/ui/notice.dart';
 import '../../simulator/mock_elm327.dart';
 
 enum _MonitorState { connecting, running, stopped, failed }
@@ -157,8 +159,6 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Monitor en vivo'),
-        backgroundColor: Colors.blue.shade700,
-        foregroundColor: Colors.white,
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -169,8 +169,6 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
               isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Escenario del simulador',
-                border: OutlineInputBorder(),
-                isDense: true,
               ),
               items: MockElm327.monitorScenarioLabels.entries
                   .map(
@@ -178,7 +176,7 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
                       value: e.key,
                       child: Text(
                         e.value,
-                        style: const TextStyle(fontSize: 13),
+                        style: const TextStyle(fontSize: 14),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -256,20 +254,14 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
             FilledButton.icon(
               onPressed: _state == _MonitorState.running ? _stop : null,
               icon: const Icon(Icons.stop),
-              label: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('Detener'),
-              ),
+              label: const Text('Detener'),
             )
           else
             FilledButton.icon(
               onPressed: _start,
               icon: const Icon(Icons.play_arrow),
-              label: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(
-                  _state == _MonitorState.failed ? 'Reintentar' : 'Reanudar',
-                ),
+              label: Text(
+                _state == _MonitorState.failed ? 'Reintentar' : 'Reanudar',
               ),
             ),
           const SizedBox(height: 12),
@@ -277,7 +269,7 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
             'Estos valores se muestran solo en este teléfono. No se guardan '
             'ni forman parte del escaneo.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: const TextStyle(fontSize: 12, color: AppColors.ink3),
           ),
         ],
       ),
@@ -298,47 +290,26 @@ class _StatusBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final IconData icon;
-    final Color color;
-    final String text;
+    final (NoticeTone tone, String text) = switch (state) {
+      _MonitorState.connecting => (
+          NoticeTone.info,
+          'Conectando con el vehículo ($source)…',
+        ),
+      _MonitorState.running => (
+          NoticeTone.success,
+          'Leyendo en vivo ($source)',
+        ),
+      _MonitorState.stopped => (
+          NoticeTone.info,
+          'Monitoreo detenido. Se muestran los últimos valores leídos.',
+        ),
+      _MonitorState.failed => (
+          NoticeTone.error,
+          'Monitoreo detenido. ${error ?? ''}',
+        ),
+    };
 
-    switch (state) {
-      case _MonitorState.connecting:
-        icon = Icons.sync;
-        color = Colors.blueGrey.shade700;
-        text = 'Conectando con el vehículo ($source)…';
-      case _MonitorState.running:
-        icon = Icons.sensors;
-        color = Colors.green.shade700;
-        text = 'Leyendo en vivo ($source)';
-      case _MonitorState.stopped:
-        icon = Icons.pause_circle_outline;
-        color = Colors.blueGrey.shade700;
-        text = 'Monitoreo detenido. Se muestran los últimos valores leídos.';
-      case _MonitorState.failed:
-        icon = Icons.error_outline;
-        color = Colors.red.shade700;
-        text = 'Monitoreo detenido. ${error ?? ''}';
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text, style: TextStyle(color: color, fontSize: 13)),
-          ),
-        ],
-      ),
-    );
+    return Notice.text(text, tone: tone);
   }
 }
 
@@ -368,7 +339,7 @@ class _ParamTile extends StatelessWidget {
     final supported = reading?.supported ?? true;
     final value = reading?.value;
     final warn = value != null && warnFrom != null && value >= warnFrom!;
-    final color = warn ? Colors.red.shade700 : Colors.blue.shade700;
+    final color = warn ? AppColors.danger : AppColors.navy;
 
     return Card(
       child: Padding(
@@ -380,7 +351,7 @@ class _ParamTile extends StatelessWidget {
               label,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+              style: const TextStyle(fontSize: 12, color: AppColors.ink2),
             ),
             const SizedBox(height: 6),
             if (!supported)
@@ -390,8 +361,8 @@ class _ParamTile extends StatelessWidget {
                   'No disponible',
                   style: TextStyle(
                     fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.ink3,
                   ),
                 ),
               )
@@ -404,15 +375,16 @@ class _ParamTile extends StatelessWidget {
                     value == null ? '—' : value.toStringAsFixed(decimals),
                     style: TextStyle(
                       fontSize: large ? 44 : 28,
-                      fontWeight: FontWeight.bold,
-                      color: warn ? color : Colors.black87,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                      color: warn ? color : AppColors.ink,
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
                   const SizedBox(width: 6),
                   Text(
                     unit,
-                    style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                    style: const TextStyle(fontSize: 13, color: AppColors.ink2),
                   ),
                 ],
               ),
@@ -425,14 +397,18 @@ class _ParamTile extends StatelessWidget {
                 minHeight: 6,
                 borderRadius: BorderRadius.circular(3),
                 color: color,
-                backgroundColor: Colors.grey.shade200,
+                backgroundColor: AppColors.line,
               ),
             ],
             if (warn) ...[
               const SizedBox(height: 6),
               Text(
                 'Temperatura alta',
-                style: TextStyle(fontSize: 12, color: color),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: color,
+                ),
               ),
             ],
           ],

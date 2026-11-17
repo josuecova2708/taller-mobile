@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/auth/auth_service.dart';
+import '../../core/api/api_client.dart';
 import '../../core/push/push_service.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/ui/badges.dart';
 import '../legal/legal_screen.dart';
 
 /// Muestra la identidad y los permisos efectivos de la sesión, y permite salir.
@@ -17,8 +20,6 @@ class AccountScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Cuenta'),
-        backgroundColor: Colors.blue.shade700,
-        foregroundColor: Colors.white,
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -30,13 +31,13 @@ class AccountScreen extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     radius: 28,
-                    backgroundColor: Colors.blue.shade100,
+                    backgroundColor: AppColors.navySoft,
                     child: Text(
                       initial,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue.shade800,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.navy,
                       ),
                     ),
                   ),
@@ -49,20 +50,16 @@ class AccountScreen extends StatelessWidget {
                           auth.userName,
                           style: const TextStyle(
                             fontSize: 17,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           (auth.user?['email'] as String?) ?? '',
-                          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                          style: const TextStyle(fontSize: 13, color: AppColors.ink2),
                         ),
-                        const SizedBox(height: 6),
-                        Chip(
-                          label: Text(auth.roleLabel),
-                          visualDensity: VisualDensity.compact,
-                          backgroundColor: Colors.blue.shade50,
-                        ),
+                        const SizedBox(height: 8),
+                        StatusBadge(auth.roleLabel, tone: BadgeTone.brand),
                       ],
                     ),
                   ),
@@ -71,27 +68,11 @@ class AccountScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
-            'NOTIFICACIONES',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey.shade600,
-              letterSpacing: 0.5,
-            ),
-          ),
+          const _SectionLabel('Notificaciones'),
           const SizedBox(height: 8),
           _NotificationsCard(push: auth.push, receivesAlerts: auth.can('order:read')),
           const SizedBox(height: 16),
-          Text(
-            'PERMISOS EFECTIVOS',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey.shade600,
-              letterSpacing: 0.5,
-            ),
-          ),
+          const _SectionLabel('Permisos de su rol'),
           const SizedBox(height: 8),
           Card(
             child: Column(
@@ -100,13 +81,13 @@ class AccountScreen extends StatelessWidget {
                     (permission) => ListTile(
                       dense: true,
                       leading: const Icon(
-                        Icons.check_circle_outline,
+                        Icons.check,
                         size: 18,
-                        color: Colors.green,
+                        color: AppColors.navy,
                       ),
                       title: Text(
                         permission,
-                        style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                        style: AppText.code.copyWith(fontSize: 13),
                       ),
                     ),
                   )
@@ -137,13 +118,11 @@ class AccountScreen extends StatelessWidget {
           const SizedBox(height: 24),
           OutlinedButton.icon(
             onPressed: () => _confirmLogout(context),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.red.shade700,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-            ),
             icon: const Icon(Icons.logout),
             label: const Text('Cerrar sesión'),
           ),
+          const SizedBox(height: 16),
+          const _ServerLine(),
         ],
       ),
     );
@@ -226,10 +205,15 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                       active
                           ? Icons.notifications_active_outlined
                           : Icons.notifications_off_outlined,
-                      color: active ? Colors.green.shade700 : Colors.grey.shade600,
+                      color: active ? AppColors.ok : AppColors.inkOff,
                     ),
                     const SizedBox(width: 12),
-                    Expanded(child: Text(text)),
+                    Expanded(
+                      child: Text(
+                        text,
+                        style: const TextStyle(fontSize: 14, height: 1.35),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -242,6 +226,49 @@ class _NotificationsCardState extends State<_NotificationsCard> {
           );
         },
       ),
+    );
+  }
+}
+
+/// Rótulo de una sección de la pantalla.
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        color: AppColors.ink2,
+      ),
+    );
+  }
+}
+
+/// Servidor al que está conectada la app. Solo se muestra cuando no es el de
+/// la universidad, para que un teléfono de pruebas no pase por uno real.
+class _ServerLine extends StatelessWidget {
+  const _ServerLine();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: ApiClient().getBaseUrl(),
+      builder: (context, snapshot) {
+        final url = snapshot.data;
+        if (url == null || url == ApiClient.productionBaseUrl) {
+          return const SizedBox.shrink();
+        }
+        return Text(
+          'Conectado a un servidor de pruebas:\n$url',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 12, color: AppColors.ink3),
+        );
+      },
     );
   }
 }

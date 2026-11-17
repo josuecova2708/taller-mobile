@@ -17,30 +17,80 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// Mensaje listo para mostrar a partir de cualquier error. Los de la API ya
+/// vienen redactados; a lo demás no se le muestra el detalle técnico.
+String mensajeDeError(
+  Object error, [
+  String porDefecto = 'Ocurrió un error inesperado. Intente de nuevo.',
+]) {
+  return error is ApiException ? error.message : porDefecto;
+}
+
 class ApiClient {
-  static const String _baseUrlKey = 'api_base_url';
+  // Solo se guarda cuando alguien cambia el servidor a mano. La clave vieja
+  // (`api_base_url`) guardaba la dirección en cada inicio de sesión, así que
+  // los teléfonos ya instalados tenían fija la de desarrollo: se ignora.
+  static const String _baseUrlOverrideKey = 'api_base_url_override';
   static const String _tokenKey = 'jwt_token';
   static const String _userKey = 'auth_user';
 
-  // En emulador Android 10.0.2.2 apunta al localhost de la PC; en web/Windows localhost.
-  // El APK de producción fija la URL al compilar:
-  //   flutter build apk --dart-define=API_BASE_URL=https://<backend>/api
+  /// Backend desplegado en Azure Container Apps.
+  static const String productionBaseUrl =
+      'https://taller-backend.proudriver-ee00705b.canadacentral.azurecontainerapps.io/api';
+
+  // La app sale apuntando al backend desplegado. Para desarrollar contra un
+  // backend local se fija otra dirección al compilar o ejecutar:
+  //   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000/api
+  // (10.0.2.2 es el localhost de la PC visto desde el emulador de Android).
   static const String defaultBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:3000/api',
+    defaultValue: productionBaseUrl,
   );
+
+  // El backend desplegado se apaga cuando no tiene uso y tarda en volver a
+  // arrancar: la primera solicitud necesita un margen amplio.
+  static const Duration _timeout = Duration(seconds: 60);
+
+  static const String _sinConexion =
+      'No se pudo conectar con el servidor. Revise su conexión e intente de nuevo.';
 
   /// Se invoca cuando el backend responde 401: la app debe volver al login.
   static void Function()? onUnauthorized;
 
   Future<String> getBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_baseUrlKey) ?? defaultBaseUrl;
+    return prefs.getString(_baseUrlOverrideKey) ?? defaultBaseUrl;
   }
 
+  /// Cambia el servidor. Vacío, o igual al de fábrica, vuelve al de fábrica.
   Future<void> setBaseUrl(String url) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_baseUrlKey, url.trim().replaceAll(RegExp(r'/$'), ''));
+    final normalized = normalizeBaseUrl(url);
+    if (normalized.isEmpty || normalized == defaultBaseUrl) {
+      await prefs.remove(_baseUrlOverrideKey);
+    } else {
+      await prefs.setString(_baseUrlOverrideKey, normalized);
+    }
+  }
+
+  /// Quita espacios y barras finales, y agrega `/api` si solo se escribió el
+  /// dominio: es fácil pegar la dirección del servidor sin la ruta.
+  static String normalizeBaseUrl(String url) {
+    final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (clean.isEmpty) return '';
+    final uri = Uri.tryParse(clean);
+    if (uri != null && uri.hasAuthority && uri.path.isEmpty) return '$clean/api';
+    return clean;
+  }
+
+  /// Ejecuta una solicitud y convierte los fallos de red (sin conexión,
+  /// servidor caído, tiempo agotado) en un `ApiException` con un mensaje claro.
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    try {
+      return await request().timeout(_timeout);
+    } catch (_) {
+      throw ApiException(_sinConexion);
+    }
   }
 
   // ---------------------------------------------------------------- sesión
@@ -71,24 +121,17 @@ class ApiClient {
   Future<Map<String, dynamic>> login(String email, String password) async {
     final baseUrl = await getBaseUrl();
 
-    final http.Response response;
-    try {
-      response = await http
-          .post(
-            Uri.parse('$baseUrl/auth/login'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'email': email.trim(), 'password': password}),
-          )
-          .timeout(const Duration(seconds: 15));
-    } catch (e) {
-      throw ApiException(
-        'No se pudo contactar al backend en $baseUrl. Verifique la URL y que el servidor esté corriendo.',
-      );
-    }
+    final response = await _send(
+      () => http.post(
+        Uri.parse('$baseUrl/auth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email.trim(), 'password': password}),
+      ),
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
-        _extractMessage(response.body) ?? 'Credenciales inválidas',
+        _extractMessage(response.body) ?? 'No se pudo iniciar sesión. Intente de nuevo.',
         statusCode: response.statusCode,
       );
     }
@@ -98,7 +141,7 @@ class ApiClient {
     final user = data['user'] as Map<String, dynamic>?;
 
     if (token == null || user == null) {
-      throw ApiException('Respuesta de login inesperada del backend.');
+      throw ApiException('El servidor respondió algo inesperado. Intente de nuevo.');
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -134,7 +177,7 @@ class ApiClient {
       final decoded = jsonDecode(body);
       if (decoded is Map && decoded['message'] != null) {
         final message = decoded['message'];
-        return message is List ? message.join(', ') : message.toString();
+        return message is List ? message.join('. ') : message.toString();
       }
     } catch (_) {
       // cuerpo no-JSON
@@ -157,16 +200,18 @@ class ApiClient {
       );
     }
     throw ApiException(
-      _extractMessage(response.body) ?? 'Error ${response.statusCode}',
+      _extractMessage(response.body) ??
+          'El servidor no pudo completar la operación (error ${response.statusCode}).',
       statusCode: response.statusCode,
     );
   }
 
   Future<dynamic> _get(String path) async {
     final baseUrl = await getBaseUrl();
-    final response = await http
-        .get(Uri.parse('$baseUrl$path'), headers: await _headers())
-        .timeout(const Duration(seconds: 10));
+    final headers = await _headers();
+    final response = await _send(
+      () => http.get(Uri.parse('$baseUrl$path'), headers: headers),
+    );
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return jsonDecode(response.body);
@@ -176,13 +221,14 @@ class ApiClient {
 
   Future<dynamic> _post(String path, [Map<String, dynamic>? body]) async {
     final baseUrl = await getBaseUrl();
-    final response = await http
-        .post(
-          Uri.parse('$baseUrl$path'),
-          headers: await _headers(),
-          body: jsonEncode(body ?? const {}),
-        )
-        .timeout(const Duration(seconds: 15));
+    final headers = await _headers();
+    final response = await _send(
+      () => http.post(
+        Uri.parse('$baseUrl$path'),
+        headers: headers,
+        body: jsonEncode(body ?? const {}),
+      ),
+    );
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return jsonDecode(response.body);
@@ -222,18 +268,6 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> submitScan(Map<String, dynamic> payload) async {
-    final baseUrl = await getBaseUrl();
-    final response = await http
-        .post(
-          Uri.parse('$baseUrl/scans'),
-          headers: await _headers(),
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 15));
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    }
-    _fail(response);
+    return await _post('/scans', payload) as Map<String, dynamic>;
   }
 }

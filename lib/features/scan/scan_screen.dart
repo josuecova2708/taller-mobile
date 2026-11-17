@@ -3,6 +3,11 @@ import 'package:flutter_bluetooth_serial_plus/flutter_bluetooth_serial_plus.dart
 import '../../core/api/api_client.dart';
 import '../../core/bluetooth/bluetooth_service.dart';
 import '../../core/elm327/elm327_service.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/ui/badges.dart';
+import '../../core/ui/format.dart';
+import '../../core/ui/notice.dart';
+import '../../core/ui/panel.dart';
 import '../../simulator/mock_elm327.dart';
 import '../monitor/live_monitor_screen.dart';
 
@@ -23,7 +28,10 @@ class _ScanScreenState extends State<ScanScreen> {
   String _selectedScenario = 'tacoma_critical';
   bool _isScanning = false;
   bool _isSending = false;
-  String _statusMessage = 'Listo para iniciar escaneo preventivo OBD-II';
+
+  String _statusMessage =
+      'Conecte el adaptador al puerto OBD-II del vehículo, ponga el contacto e inicie el escaneo.';
+  NoticeTone _statusTone = NoticeTone.info;
 
   List<BluetoothDevice> _pairedDevices = [];
   BluetoothDevice? _selectedDevice;
@@ -33,15 +41,22 @@ class _ScanScreenState extends State<ScanScreen> {
 
   ObdScanResult? _lastResult;
   Map<String, dynamic>? _backendEvaluation;
+
+  /// La lectura mostrada ya se guardó: no se envía dos veces.
+  bool _sent = false;
+
+  /// El servidor está generando la hipótesis de IA del escaneo enviado.
+  bool _aiRequested = false;
+
   final TextEditingController _notesController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _loadInitialData();
+    _loadVehicles();
   }
 
-  Future<void> _loadInitialData() async {
+  Future<void> _loadVehicles() async {
     try {
       final list = await _apiClient.getVehicles();
       if (mounted) {
@@ -51,7 +66,7 @@ class _ScanScreenState extends State<ScanScreen> {
         setState(() => _vehicles = list);
       }
     } catch (_) {
-      // Si el backend no está corriendo aún, permite escanear por VIN igualmente
+      // Sin conexión se puede leer igual: el vehículo se identifica por su VIN.
     }
   }
 
@@ -60,6 +75,14 @@ class _ScanScreenState extends State<ScanScreen> {
     _bluetoothService.disconnect();
     _notesController.dispose();
     super.dispose();
+  }
+
+  void _setStatus(String message, [NoticeTone tone = NoticeTone.info]) {
+    if (!mounted) return;
+    setState(() {
+      _statusMessage = message;
+      _statusTone = tone;
+    });
   }
 
   Future<void> _loadPairedDevices() async {
@@ -72,6 +95,7 @@ class _ScanScreenState extends State<ScanScreen> {
           _selectedDevice = _pairedDevices.first;
         }
         if (devices.isEmpty) {
+          _statusTone = NoticeTone.warning;
           _statusMessage =
               'No hay adaptadores vinculados. Vincule el ELM327 en los ajustes de Bluetooth del teléfono.';
         }
@@ -80,7 +104,10 @@ class _ScanScreenState extends State<ScanScreen> {
       if (!mounted) return;
       setState(() {
         _pairedDevices = [];
-        _statusMessage = '$e';
+        _statusTone = NoticeTone.error;
+        _statusMessage = e is BluetoothException
+            ? e.message
+            : 'No se pudo consultar el Bluetooth del teléfono.';
       });
     }
   }
@@ -99,16 +126,30 @@ class _ScanScreenState extends State<ScanScreen> {
 
   bool get _canSend {
     final result = _lastResult;
-    if (result == null || !result.isComplete) return false;
+    if (result == null || !result.isComplete || _sent) return false;
     return _selectedVehicleId != null || (result.vin?.isNotEmpty ?? false);
   }
 
   Future<void> _startScan() async {
+    if (!_useSimulator && _selectedDevice == null) {
+      _setStatus(
+        'Seleccione primero el adaptador ELM327 vinculado.',
+        NoticeTone.warning,
+      );
+      return;
+    }
+
+    // Por si el listado no cargó al abrir (sin conexión, servidor arrancando).
+    if (_vehicles.isEmpty) _loadVehicles();
+
     setState(() {
       _isScanning = true;
       _lastResult = null;
       _backendEvaluation = null;
-      _statusMessage = 'Iniciando comunicación con ELM327...';
+      _sent = false;
+      _aiRequested = false;
+      _statusTone = NoticeTone.info;
+      _statusMessage = 'Iniciando la comunicación con el adaptador…';
     });
 
     try {
@@ -118,12 +159,9 @@ class _ScanScreenState extends State<ScanScreen> {
         _mockElm327.scenario = _selectedScenario;
         sender = _mockElm327.sendCommand;
       } else {
-        if (_selectedDevice == null) {
-          throw Exception('Selecciona primero un dispositivo Bluetooth ELM327 vinculado.');
-        }
-        setState(() {
-          _statusMessage = 'Conectando por Bluetooth SPP a ${_selectedDevice!.name}...';
-        });
+        _setStatus(
+          'Conectando por Bluetooth con ${_selectedDevice!.name ?? 'el adaptador'}…',
+        );
         await _bluetoothService.connect(_selectedDevice!.address);
         // El reinicio del adaptador y la primera consulta OBD (cuando busca
         // el protocolo, "SEARCHING...") tardan bastante más que el resto.
@@ -137,43 +175,45 @@ class _ScanScreenState extends State<ScanScreen> {
 
       final result = await _elm327Service.runFullScan(
         sendCommand: sender,
-        onStep: (step) {
-          if (mounted) {
-            setState(() => _statusMessage = step);
-          }
-        },
+        onStep: _setStatus,
       );
 
       if (mounted) {
         final porVin = _vehicleIdForVin(result.vin);
+        final codigos = cuentaCodigos(result.dtcs.length);
         setState(() {
           _lastResult = result;
           // El VIN que reporta la ECU manda sobre la selección manual.
           if (porVin != null) _selectedVehicleId = porVin;
 
           if (!result.isComplete) {
+            _statusTone = NoticeTone.error;
             _statusMessage =
                 'Lectura incompleta: no se puede registrar este escaneo.';
           } else if (porVin != null) {
+            _statusTone = NoticeTone.info;
             _statusMessage =
-                'Lectura completada: ${result.dtcs.length} código(s). Vehículo identificado por su VIN.';
-          } else if (_selectedVehicleId == null) {
+                'Lectura completa: $codigos. Vehículo identificado por su VIN.';
+          } else if (_selectedVehicleId == null &&
+              (result.vin?.isEmpty ?? true)) {
+            _statusTone = NoticeTone.warning;
             _statusMessage =
-                'Lectura completada: ${result.dtcs.length} código(s). Seleccione el vehículo antes de enviar.';
+                'Lectura completa: $codigos. Seleccione el vehículo antes de enviar.';
           } else {
-            _statusMessage =
-                'Lectura completada: ${result.dtcs.length} código(s) DTC leídos.';
+            _statusTone = NoticeTone.info;
+            _statusMessage = 'Lectura completa: $codigos.';
           }
         });
       }
     } on ObdCommunicationException catch (e) {
-      if (mounted) setState(() => _statusMessage = e.message);
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _statusMessage = 'Error en escaneo: $e';
-        });
-      }
+      _setStatus(e.message, NoticeTone.error);
+    } on BluetoothException catch (e) {
+      _setStatus(e.message, NoticeTone.error);
+    } catch (_) {
+      _setStatus(
+        'No se pudo completar el escaneo. Revise el adaptador y vuelva a intentar.',
+        NoticeTone.error,
+      );
     } finally {
       // Se libera el adaptador al terminar: dejar el canal abierto impide
       // reconectar y agota la batería del vehículo con el contacto puesto.
@@ -188,10 +228,10 @@ class _ScanScreenState extends State<ScanScreen> {
   /// escaneo: el simulador o el adaptador Bluetooth seleccionado.
   void _openLiveMonitor() {
     if (!_useSimulator && _selectedDevice == null) {
-      setState(() {
-        _statusMessage =
-            'Selecciona primero un dispositivo Bluetooth ELM327 vinculado.';
-      });
+      _setStatus(
+        'Seleccione primero el adaptador ELM327 vinculado.',
+        NoticeTone.warning,
+      );
       return;
     }
 
@@ -208,11 +248,12 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  Future<void> _sendToBackend() async {
+  Future<void> _sendScan() async {
     if (!_canSend) return;
     setState(() {
       _isSending = true;
-      _statusMessage = 'Enviando lectura al backend NestJS (/api/scans)...';
+      _statusTone = NoticeTone.info;
+      _statusMessage = 'Enviando el escaneo al servidor…';
     });
 
     try {
@@ -224,17 +265,23 @@ class _ScanScreenState extends State<ScanScreen> {
       );
       final response = await _apiClient.submitScan(payload);
       if (mounted) {
+        final diagnosis = response['diagnosis'] as Map<String, dynamic>?;
         setState(() {
           _backendEvaluation = response['evaluation'] as Map<String, dynamic>?;
-          _statusMessage = '✅ Escaneo guardado y evaluado en Neon PostgreSQL';
+          _aiRequested = diagnosis?['requested'] == true;
+          _sent = true;
+          _statusTone = NoticeTone.success;
+          _statusMessage = response['workOrderId'] != null
+              ? 'Escaneo guardado. Se generó una orden de trabajo.'
+              : 'Escaneo guardado.';
         });
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _statusMessage = '❌ Error al enviar al backend: $e';
-        });
-      }
+      // La lectura queda en pantalla: se puede reintentar el envío.
+      _setStatus(
+        mensajeDeError(e, 'No se pudo enviar el escaneo. Intente de nuevo.'),
+        NoticeTone.error,
+      );
     } finally {
       if (mounted) {
         setState(() => _isSending = false);
@@ -242,407 +289,330 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
-  Future<void> _showApiUrlDialog() async {
-    final currentUrl = await _apiClient.getBaseUrl();
-    final ctrl = TextEditingController(text: currentUrl);
-    if (!mounted) return;
+  @override
+  Widget build(BuildContext context) {
+    final result = _lastResult;
 
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Configurar URL del Backend'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '• Windows / Web: http://localhost:3000/api\n'
-              '• Emulador Android: http://10.0.2.2:3000/api\n'
-              '• Celular físico: http://<IP_DE_TU_PC>:3000/api',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Escanear vehículo')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildSource(),
+          const SizedBox(height: 12),
+
+          // Selección de vehículo (respaldo si la ECU no reporta VIN)
+          if (_vehicles.isNotEmpty) ...[
+            _buildVehicle(),
             const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              decoration: const InputDecoration(
-                labelText: 'Base URL',
-                border: OutlineInputBorder(),
+          ],
+
+          FilledButton.icon(
+            onPressed: _isScanning || _isSending ? null : _startScan,
+            icon: _isScanning
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.sensors),
+            label: Text(_isScanning ? 'Leyendo el vehículo…' : 'Iniciar escaneo'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _isScanning ? null : _openLiveMonitor,
+            icon: const Icon(Icons.speed),
+            label: const Text('Monitor en vivo'),
+          ),
+          const SizedBox(height: 12),
+
+          Notice.text(_statusMessage, tone: _statusTone),
+
+          if (result != null) ...[
+            const SizedBox(height: 12),
+            _buildResult(result),
+          ],
+
+          if (_backendEvaluation != null) ...[
+            const SizedBox(height: 12),
+            Panel(
+              title: 'Dictamen',
+              trailing: SeverityBadge(_backendEvaluation!['severity'] as String?),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '${_backendEvaluation!['rationale'] ?? ''}',
+                    style: const TextStyle(fontSize: 14, height: 1.4),
+                  ),
+                  if (_aiRequested) ...[
+                    const SizedBox(height: 12),
+                    Notice.text(
+                      'La hipótesis de la inteligencia artificial se está '
+                      'generando. Podrá verla en la plataforma web, sujeta a '
+                      'validación humana.',
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              await _apiClient.setBaseUrl(ctrl.text);
-              if (ctx.mounted) Navigator.pop(ctx);
-              _loadInitialData();
-            },
-            child: const Text('Guardar'),
-          ),
         ],
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Escanear Vehículo'),
-        actions: [
-          IconButton(
-            tooltip: 'Configurar URL Backend',
-            icon: const Icon(Icons.settings_ethernet),
-            onPressed: _showApiUrlDialog,
+  Widget _buildSource() {
+    return Panel(
+      title: 'Origen de la lectura',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'Usar el simulador',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+            ),
+            subtitle: Text(
+              _useSimulator
+                  ? 'Lecturas de ejemplo, sin adaptador ni vehículo.'
+                  : 'Adaptador ELM327 conectado por Bluetooth.',
+              style: const TextStyle(fontSize: 13, color: AppColors.ink2),
+            ),
+            value: _useSimulator,
+            onChanged: _isScanning
+                ? null
+                : (val) {
+                    setState(() => _useSimulator = val);
+                    if (!val) _loadPairedDevices();
+                  },
           ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Modo Simulador vs Bluetooth Real
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text(
-                        'Modo Simulador (MockElm327)',
-                        style: TextStyle(fontWeight: FontWeight.bold),
+          const SizedBox(height: 8),
+          if (_useSimulator)
+            DropdownButtonFormField<String>(
+              initialValue: _selectedScenario,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Escenario de prueba',
+              ),
+              items: MockElm327.scenarioLabels.entries
+                  .map(
+                    (e) => DropdownMenuItem(
+                      value: e.key,
+                      child: Text(
+                        e.value,
+                        style: const TextStyle(fontSize: 14),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      subtitle: Text(
-                        _useSimulator
-                            ? 'Simulando respuestas hexadecimales OBD-II sin hardware físico'
-                            : 'Conexión Bluetooth Classic (SPP) con adaptador ELM327 real',
-                      ),
-                      value: _useSimulator,
-                      onChanged: (val) {
-                        setState(() => _useSimulator = val);
-                        if (!val) _loadPairedDevices();
-                      },
                     ),
-                    if (_useSimulator) ...[
-                      const Divider(),
-                      const Text(
-                        'Escenario de prueba:',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 6),
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedScenario,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        items: MockElm327.scenarioLabels.entries
-                            .map(
-                              (e) => DropdownMenuItem(
-                                value: e.key,
-                                child: Text(
-                                  e.value,
-                                  style: const TextStyle(fontSize: 13),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (val) {
-                          if (val != null) {
-                            setState(() => _selectedScenario = val);
-                          }
-                        },
-                      ),
-                    ] else ...[
-                      const Divider(),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: DropdownButtonFormField<BluetoothDevice>(
-                              initialValue: _selectedDevice,
-                              hint: const Text('Seleccionar ELM327 vinculado'),
-                              isExpanded: true,
-                              items: _pairedDevices
-                                  .map(
-                                    (d) => DropdownMenuItem(
-                                      value: d,
-                                      child: Text('${d.name ?? "Dispositivo"} (${d.address})'),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (d) => setState(() => _selectedDevice = d),
+                  )
+                  .toList(),
+              onChanged: (val) {
+                if (val != null) {
+                  setState(() => _selectedScenario = val);
+                }
+              },
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<BluetoothDevice>(
+                    // `initialValue` solo se lee al crear el campo.
+                    key: ValueKey(_selectedDevice?.address),
+                    initialValue: _selectedDevice,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Adaptador vinculado',
+                    ),
+                    items: _pairedDevices
+                        .map(
+                          (d) => DropdownMenuItem(
+                            value: d,
+                            child: Text(
+                              '${d.name ?? "Dispositivo"} (${d.address})',
+                              style: const TextStyle(fontSize: 14),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          IconButton(
-                            onPressed: _loadPairedDevices,
-                            icon: const Icon(Icons.refresh),
-                          ),
-                        ],
+                        )
+                        .toList(),
+                    onChanged: (d) => setState(() => _selectedDevice = d),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: 'Actualizar la lista de adaptadores',
+                  onPressed: _loadPairedDevices,
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVehicle() {
+    return Panel(
+      title: 'Vehículo',
+      child: DropdownButtonFormField<String>(
+        // La clave fuerza a redibujar cuando el VIN leído cambia la
+        // selección: `initialValue` solo se lee al crear el campo.
+        key: ValueKey(_selectedVehicleId),
+        initialValue: _selectedVehicleId,
+        isExpanded: true,
+        decoration: const InputDecoration(
+          helperText: 'Si el vehículo informa su VIN, se identifica solo.',
+        ),
+        items: [
+          const DropdownMenuItem<String>(
+            value: null,
+            child: Text('Identificar por el VIN leído'),
+          ),
+          ..._vehicles.map((v) {
+            final vehicle = v as Map<String, dynamic>;
+            final description = descripcionVehiculo(vehicle);
+            return DropdownMenuItem<String>(
+              value: vehicle['id'] as String,
+              child: Text(
+                description.isEmpty
+                    ? '${vehicle['plate']}'
+                    : '${vehicle['plate']} · $description',
+                overflow: TextOverflow.ellipsis,
+              ),
+            );
+          }),
+        ],
+        onChanged:
+            _sent ? null : (val) => setState(() => _selectedVehicleId = val),
+      ),
+    );
+  }
+
+  Widget _buildResult(ObdScanResult result) {
+    return Panel(
+      title: 'Resultado de la lectura',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Dato(
+            label: 'VIN',
+            value: result.vin ?? 'No informado',
+            code: result.vin != null,
+          ),
+          Dato(
+            label: 'Voltaje de la batería',
+            value: result.batteryVoltage != null
+                ? '${result.batteryVoltage!.toStringAsFixed(1)} V'
+                : 'No disponible',
+          ),
+          Dato(
+            label: 'Luz de falla del motor',
+            value: result.readiness.milOn ? 'Encendida' : 'Apagada',
+          ),
+          Dato(
+            label: 'Monitores OBD',
+            value: result.readiness.monitorsCompleted
+                ? 'Completos'
+                : 'Incompletos (${result.readiness.incompleteMonitors.join(", ")})',
+          ),
+          if (!result.isComplete) ...[
+            const SizedBox(height: 12),
+            Notice(
+              tone: NoticeTone.error,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'No se pudo leer:',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  ...result.readErrors.map((e) => Text('• $e')),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Que no aparezcan códigos no significa que el vehículo '
+                    'esté sano. Revise el adaptador y vuelva a escanear.',
+                  ),
+                ],
+              ),
+            ),
+          ],
+          ...result.warnings.map(
+            (w) => Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Notice.text(w),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Códigos de falla (${result.dtcs.length})',
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          if (!result.isComplete && result.dtcs.isEmpty)
+            const Text(
+              'Sin datos: la lectura no se completó.',
+              style: TextStyle(fontSize: 14, color: AppColors.ink2),
+            )
+          else if (result.dtcs.isEmpty)
+            const Row(
+              children: [
+                Icon(Icons.check_circle_outline, size: 18, color: AppColors.ok),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'El vehículo no registra códigos de falla.',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                ),
+              ],
+            )
+          else
+            ...result.dtcs.map(
+              (d) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        d.code,
+                        style: AppText.code.copyWith(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ],
+                    ),
+                    DtcTypeBadge(d.type),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-
-            // Selección de vehículo (respaldo si la ECU no reporta VIN)
-            if (_vehicles.isNotEmpty)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: DropdownButtonFormField<String>(
-                    // La clave fuerza a redibujar cuando el VIN leído cambia la
-                    // selección: `initialValue` solo se lee al crear el campo.
-                    key: ValueKey(_selectedVehicleId),
-                    initialValue: _selectedVehicleId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Vehículo objetivo (o detección automática por VIN)',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Detectar automáticamente por VIN (Modo 09)'),
-                      ),
-                      ..._vehicles.map(
-                        (v) => DropdownMenuItem<String>(
-                          value: v['id'] as String,
-                          child: Text('${v['plate']} — ${v['make'] ?? ''} ${v['model'] ?? ''}'),
-                        ),
-                      ),
-                    ],
-                    onChanged: (val) => setState(() => _selectedVehicleId = val),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-
-            // Botón principal de escaneo
-            FilledButton.icon(
-              onPressed: _isScanning ? null : _startScan,
-              icon: _isScanning
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.radar),
-              label: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                child: Text(
-                  _isScanning ? 'Escaneando ECU...' : 'Iniciar Escaneo',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-              ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _notesController,
+            enabled: !_sent,
+            maxLines: null,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Observación (opcional)',
+              helperText: 'Por ejemplo: se cambió la batería hace poco.',
             ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _isScanning ? null : _openLiveMonitor,
-              icon: const Icon(Icons.speed),
-              label: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 10),
-                child: Text('Monitor en vivo'),
-              ),
-            ),
-            const SizedBox(height: 10),
-
-            Text(
-              _statusMessage,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 13, color: Colors.black87),
-            ),
-
-            // Resultado del escaneo
-            if (_lastResult != null) ...[
-              const SizedBox(height: 16),
-              Card(
-                elevation: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Resultado de Lectura OBD-II',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                      const Divider(),
-                      _infoRow('VIN (Modo 09 PID 02):', _lastResult!.vin ?? 'No disponible'),
-                      _infoRow(
-                        'Voltaje Batería (ATRV):',
-                        _lastResult!.batteryVoltage != null
-                            ? '${_lastResult!.batteryVoltage!.toStringAsFixed(1)} V'
-                            : 'N/A',
-                      ),
-                      _infoRow(
-                        'Luz Check Engine (MIL):',
-                        _lastResult!.readiness.milOn ? 'ENCENDIDA (ON)' : 'Apagada (OFF)',
-                      ),
-                      _infoRow(
-                        'Monitores OBD (PID 0101):',
-                        _lastResult!.readiness.monitorsCompleted
-                            ? 'Completos'
-                            : 'Incompletos (${_lastResult!.readiness.incompleteMonitors.join(", ")})',
-                      ),
-                      if (!_lastResult!.isComplete) ...[
-                        const SizedBox(height: 12),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.red.shade50,
-                            border: Border.all(color: Colors.red.shade300),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'No se pudo leer:',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.red,
-                                ),
-                              ),
-                              ..._lastResult!.readErrors.map(
-                                (e) => Text('• $e', style: const TextStyle(fontSize: 13)),
-                              ),
-                              const SizedBox(height: 6),
-                              const Text(
-                                'Que no aparezcan códigos NO significa que el '
-                                'vehículo esté sano. Revise el adaptador y '
-                                'vuelva a escanear.',
-                                style: TextStyle(fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                      ..._lastResult!.warnings.map(
-                        (w) => Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(
-                            'ⓘ $w',
-                            style: const TextStyle(fontSize: 12, color: Colors.black54),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Códigos DTC Detectados (${_lastResult!.dtcs.length}):',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 6),
-                      if (!_lastResult!.isComplete && _lastResult!.dtcs.isEmpty)
-                        const Text(
-                          'Sin datos: la lectura no se completó.',
-                          style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
-                        )
-                      else if (_lastResult!.dtcs.isEmpty)
-                        const Text(
-                          '✅ Sin códigos de falla en Modos 03 / 07 / 0A',
-                          style: TextStyle(color: Colors.green, fontWeight: FontWeight.w600),
-                        )
-                      else
-                        ..._lastResult!.dtcs.map(
-                          (d) => ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.warning_amber_rounded, color: Colors.deepOrange),
-                            title: Text(
-                              d.code,
-                              style: const TextStyle(
-                                fontFamily: 'monospace',
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            trailing: Chip(
-                              label: Text(d.type, style: const TextStyle(fontSize: 11)),
-                            ),
-                          ),
-                        ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _notesController,
-                        decoration: const InputDecoration(
-                          labelText: 'Observación del inspector (ej. cambio reciente de batería)',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.tonalIcon(
-                          onPressed: _isSending || !_canSend ? null : _sendToBackend,
-                          icon: const Icon(Icons.cloud_upload),
-                          label: Text(
-                            _isSending
-                                ? 'Enviando al Servidor...'
-                                : 'Enviar Escaneo al Backend (POST /scans)',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-
-            if (_backendEvaluation != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                color: Colors.blueGrey.shade50,
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Dictamen Filtro Determinístico (Severidad: ${_backendEvaluation!['severity']})',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '${_backendEvaluation!['rationale'] ?? ''}',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(color: Colors.black54, fontSize: 13)),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _isSending || !_canSend ? null : _sendScan,
+            icon: Icon(_sent ? Icons.check : Icons.cloud_upload_outlined),
+            label: Text(
+              _sent
+                  ? 'Escaneo enviado'
+                  : _isSending
+                      ? 'Enviando…'
+                      : 'Enviar escaneo',
             ),
           ),
         ],

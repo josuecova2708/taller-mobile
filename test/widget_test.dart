@@ -17,11 +17,11 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
 
-      expect(find.text('Iniciar Sesión'), findsOneWidget);
-      expect(find.text('Correo institucional'), findsOneWidget);
+      expect(find.text('Iniciar sesión'), findsOneWidget);
+      expect(find.text('Correo electrónico'), findsOneWidget);
 
       // Regresión: antes la app entraba directo al escaneo sin autenticar.
-      expect(find.text('Escanear Vehículo'), findsNothing);
+      expect(find.text('Escanear vehículo'), findsNothing);
       expect(find.byType(NavigationBar), findsNothing);
     });
 
@@ -43,7 +43,8 @@ void main() {
       // pero la sesión local se conserva: la app no debe expulsar al usuario
       // por falta de conectividad.
       expect(find.byType(NavigationBar), findsOneWidget);
-      expect(find.text('Iniciar Sesión'), findsNothing);
+      expect(find.text('Escanear vehículo'), findsOneWidget);
+      expect(find.text('Iniciar sesión'), findsNothing);
     });
   });
 

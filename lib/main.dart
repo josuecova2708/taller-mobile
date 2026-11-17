@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'core/api/api_client.dart';
 import 'core/auth/auth_service.dart';
 import 'core/push/push_service.dart';
+import 'core/theme/app_theme.dart';
 import 'features/auth/account_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/scan/scan_screen.dart';
@@ -27,15 +28,12 @@ class TallerMobileApp extends StatelessWidget {
         return auth;
       },
       child: MaterialApp(
-        title: 'Taller OBD-II',
+        title: 'Diagnóstico vehicular UAGRM',
         // Las notificaciones push navegan y avisan desde fuera de los widgets.
         navigatorKey: PushService.navigatorKey,
         scaffoldMessengerKey: PushService.messengerKey,
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorSchemeSeed: Colors.blue,
-          useMaterial3: true,
-        ),
+        theme: AppTheme.light,
         home: const AuthGate(),
       ),
     );
@@ -88,36 +86,52 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _screens[_selectedIndex],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.qr_code_scanner),
-            selectedIcon: Icon(Icons.qr_code_scanner, color: Colors.blue),
-            label: 'Escanear',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.directions_car),
-            selectedIcon: Icon(Icons.directions_car, color: Colors.blue),
-            label: 'Vehículos',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history),
-            selectedIcon: Icon(Icons.history, color: Colors.blue),
-            label: 'Historial',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: Colors.blue),
-            label: 'Cuenta',
-          ),
+      // La pantalla de escaneo se conserva al cambiar de pestaña, para no
+      // descartar una lectura que todavía no se envió. Las demás se vuelven a
+      // crear al entrar, así muestran datos recientes.
+      body: IndexedStack(
+        index: _selectedIndex == 0 ? 0 : 1,
+        children: [
+          _screens[0],
+          if (_selectedIndex == 0)
+            const SizedBox.shrink()
+          else
+            KeyedSubtree(
+              key: ValueKey(_selectedIndex),
+              child: _screens[_selectedIndex],
+            ),
         ],
+      ),
+      bottomNavigationBar: DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: AppColors.line)),
+        ),
+        child: NavigationBar(
+          selectedIndex: _selectedIndex,
+          onDestinationSelected: (index) {
+            setState(() => _selectedIndex = index);
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.sensors),
+              label: 'Escanear',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.directions_car_outlined),
+              selectedIcon: Icon(Icons.directions_car),
+              label: 'Vehículos',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.history),
+              label: 'Historial',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline),
+              selectedIcon: Icon(Icons.person),
+              label: 'Cuenta',
+            ),
+          ],
+        ),
       ),
     );
   }

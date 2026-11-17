@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/ui/badges.dart';
+import '../../core/ui/format.dart';
+import '../../core/ui/panel.dart';
 
 /// Detalle de la alerta que se abre al tocar una notificación push (CU18).
 ///
@@ -36,8 +40,6 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Orden de trabajo'),
-        backgroundColor: Colors.blue.shade700,
-        foregroundColor: Colors.white,
       ),
       body: FutureBuilder<Map<String, dynamic>>(
         future: _order,
@@ -64,31 +66,16 @@ class _ErrorView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final forbidden = error is ApiException && (error as ApiException).isForbidden;
-    final message = forbidden
-        ? 'Su rol no puede ver órdenes de trabajo.'
-        : error is ApiException
-            ? (error as ApiException).message
-            : 'No se pudo cargar la orden. Revise la conexión.';
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline, size: 40, color: Colors.grey.shade600),
-            const SizedBox(height: 12),
-            Text(message, textAlign: TextAlign.center),
-            if (!forbidden) ...[
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: onRetry,
-                child: const Text('Reintentar'),
-              ),
-            ],
-          ],
-        ),
-      ),
+    if (forbidden) {
+      return const EmptyState(
+        title: 'Su rol no puede ver órdenes de trabajo',
+        message: 'Las ven los mecánicos y los administradores.',
+      );
+    }
+    return EmptyState.error(
+      title: 'No se pudo cargar la orden',
+      error: error,
+      onRetry: onRetry,
     );
   }
 }
@@ -97,46 +84,6 @@ class _OrderView extends StatelessWidget {
   const _OrderView({required this.order});
 
   final Map<String, dynamic> order;
-
-  static const _priorityLabels = {
-    'LOW': 'Prioridad baja',
-    'MEDIUM': 'Prioridad media',
-    'HIGH': 'Prioridad alta',
-    'CRITICAL': 'Prioridad crítica',
-  };
-
-  static const _statusLabels = {
-    'OPEN': 'Abierta',
-    'IN_PROGRESS': 'En proceso',
-    'COMPLETED': 'Completada',
-    'CANCELLED': 'Cancelada',
-  };
-
-  static const _dtcTypeLabels = {
-    'CONFIRMED': 'Confirmado',
-    'PENDING': 'Pendiente',
-    'PERMANENT': 'Permanente',
-  };
-
-  Color _priorityColor(String priority) {
-    switch (priority) {
-      case 'CRITICAL':
-      case 'HIGH':
-        return Colors.red.shade700;
-      case 'MEDIUM':
-        return Colors.orange.shade800;
-      default:
-        return Colors.green.shade700;
-    }
-  }
-
-  String _date(String? iso) {
-    final date = iso == null ? null : DateTime.tryParse(iso)?.toLocal();
-    if (date == null) return '-';
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(date.day)}/${two(date.month)}/${date.year} '
-        '${two(date.hour)}:${two(date.minute)}';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -150,9 +97,7 @@ class _OrderView extends StatelessWidget {
 
     final plate = (vehicle['plate'] as String?) ?? '-';
     final alias = (vehicle['alias'] as String?) ?? '';
-    final model = [vehicle['make'], vehicle['model'], vehicle['year']]
-        .where((v) => v != null && v.toString().isNotEmpty)
-        .join(' ');
+    final model = descripcionVehiculo(vehicle);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -165,35 +110,24 @@ class _OrderView extends StatelessWidget {
               children: [
                 Text(
                   plate,
-                  style: const TextStyle(
+                  style: AppText.code.copyWith(
                     fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.ink,
                   ),
                 ),
                 if (alias.isNotEmpty || model.isNotEmpty)
                   Text(
                     [alias, model].where((t) => t.isNotEmpty).join(' · '),
-                    style: TextStyle(color: Colors.grey.shade700),
+                    style: const TextStyle(fontSize: 14, color: AppColors.ink2),
                   ),
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    Chip(
-                      avatar: Icon(
-                        Icons.flag,
-                        size: 16,
-                        color: _priorityColor(priority),
-                      ),
-                      label: Text(_priorityLabels[priority] ?? priority),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    Chip(
-                      label: Text(_statusLabels[status] ?? status),
-                      visualDensity: VisualDensity.compact,
-                    ),
+                    PriorityBadge(priority),
+                    OrderStatusBadge(status),
                   ],
                 ),
               ],
@@ -203,28 +137,48 @@ class _OrderView extends StatelessWidget {
         const SizedBox(height: 12),
         _Section(
           title: 'Motivo',
-          child: Text((order['description'] as String?) ?? '-'),
+          child: Text(
+            (order['description'] as String?) ?? '-',
+            style: const TextStyle(fontSize: 14, height: 1.4),
+          ),
         ),
         _Section(
           title: 'Códigos de falla',
           child: dtcs.isEmpty
               ? const Text('El escaneo no registró códigos de falla.')
               : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: dtcs.map((entry) {
                     final dtc = entry as Map<String, dynamic>;
                     final type = (dtc['type'] as String?) ?? '';
-                    return ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(
-                        '${dtc['code']} · ${_dtcTypeLabels[type] ?? type}',
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      subtitle: Text(
-                        (dtc['description'] as String?) ?? 'Sin descripción',
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${dtc['code']}',
+                                  style: AppText.code.copyWith(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              DtcTypeBadge(type),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            (dtc['description'] as String?) ?? 'Sin descripción',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppColors.ink2,
+                            ),
+                          ),
+                        ],
                       ),
                     );
                   }).toList(),
@@ -235,14 +189,20 @@ class _OrderView extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Creada: ${_date(order['createdAt'] as String?)}'),
-              const SizedBox(height: 4),
-              Text(
-                'Mecánico: ${(assignedTo?['name'] as String?) ?? 'sin asignar'}',
+              Dato(
+                label: 'Creada',
+                value: fechaHora(order['createdAt'] as String?),
+              ),
+              Dato(
+                label: 'Mecánico',
+                value: (assignedTo?['name'] as String?) ?? 'Sin asignar',
               ),
               if (notes.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                Text(notes, style: TextStyle(color: Colors.grey.shade800)),
+                Text(
+                  notes,
+                  style: const TextStyle(fontSize: 14, color: AppColors.ink2),
+                ),
               ],
             ],
           ),
@@ -250,7 +210,8 @@ class _OrderView extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           'La orden se asigna, avanza y cierra desde la plataforma web.',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 12, color: AppColors.ink3),
         ),
       ],
     );
@@ -265,26 +226,9 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              title.toUpperCase(),
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey.shade600,
-                letterSpacing: 0.5,
-              ),
-            ),
-            const SizedBox(height: 8),
-            child,
-          ],
-        ),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Panel(title: title, child: child),
     );
   }
 }

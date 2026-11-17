@@ -1,5 +1,5 @@
 name: taller_mobile
-description: A new Flutter project.
+description: Diagnóstico vehicular preventivo del parque automotor de la UAGRM (OBD-II por Bluetooth).
 version: 1.0.0+1
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -25,3 +25,26 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/uagrm.jpg
+
+  # IBM Plex, la misma tipografía de la plataforma web (licencia OFL).
+  fonts:
+    - family: IBMPlexSans
+      fonts:
+        - asset: assets/fonts/IBMPlexSans-Regular.ttf
+        - asset: assets/fonts/IBMPlexSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/IBMPlexSans-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/IBMPlexSans-Bold.ttf
+          weight: 700
+    - family: IBMPlexMono
+      fonts:
+        - asset: assets/fonts/IBMPlexMono-Regular.ttf
+        - asset: assets/fonts/IBMPlexMono-SemiBold.ttf
+          weight: 600

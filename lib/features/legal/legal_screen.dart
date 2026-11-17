@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_theme.dart';
 import 'legal_texts.dart';
 
 /// Política de privacidad o términos de uso. Los textos van dentro de la app,
@@ -20,20 +21,18 @@ class LegalScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final body = Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.4);
+    final body = Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(document.title),
-        backgroundColor: Colors.blue.shade700,
-        foregroundColor: Colors.white,
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         children: [
           Text(
             'Última actualización: ${document.updated}',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: const TextStyle(fontSize: 12, color: AppColors.ink3),
           ),
           const SizedBox(height: 12),
           Text(document.intro, style: body),
@@ -41,7 +40,11 @@ class LegalScreen extends StatelessWidget {
             const SizedBox(height: 20),
             Text(
               section.title,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: AppColors.navy,
+              ),
             ),
             for (final paragraph in section.paragraphs) ...[
               const SizedBox(height: 6),
