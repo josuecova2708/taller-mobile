@@ -204,7 +204,7 @@ void main() {
       final result = await elm.runFullScan(sendCommand: mock.sendCommand);
 
       expect(result.isComplete, true);
-      expect(result.vin, '5TFCZ5AN3MX255216');
+      expect(result.vin, 'TESTTAC0000000001');
       expect(
         result.dtcs.map((d) => d.code),
         ['P0300', 'P0301', 'P0171', 'P0420', 'P0700'],

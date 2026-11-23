@@ -48,14 +48,14 @@ void main() {
     });
   });
 
-  test('Elm327Service decodes Tacoma VIN, Readiness (0101), Voltage, and DTCs (03/07/0A)',
+  test('Elm327Service decodes simulated pickup VIN, Readiness (0101), Voltage, and DTCs (03/07/0A)',
       () async {
     final elm = Elm327Service();
     final mock = MockElm327(scenario: 'tacoma_critical');
 
     final result = await elm.runFullScan(sendCommand: mock.sendCommand);
 
-    expect(result.vin, '5TFCZ5AN3MX255216');
+    expect(result.vin, 'TESTTAC0000000001');
     expect(result.batteryVoltage, 13.3);
     expect(result.readiness.milOn, true);
     expect(result.readiness.monitorsCompleted, true);

@@ -34,7 +34,7 @@ class MockElm327 {
   static const int _readsBeforeDrop = 20;
 
   static const Map<String, String> scenarioLabels = {
-    'tacoma_critical': 'Caso 1: Toyota Tacoma (P0300+P0301 Confirmados/Permanentes)',
+    'tacoma_critical': 'Caso 1: Camioneta ficticia TESTTAC (P0300+P0301 Confirmados/Permanentes)',
     'bus_battery_reset': 'Caso 2: Bus 3110-BUS (P2195 Pendiente + Monitores Incompletos)',
     'hilux_clean': 'Caso 3: Hilux 4012-UAG (Sin Fallas + Monitores Completos)',
     'legacy_iso9141': 'Caso 4: Vehículo pre-2008 (ISO 9141-2, sin byte de conteo)',
@@ -55,7 +55,7 @@ class MockElm327 {
           'ATDPN': 'A6\r\r>',
           'ATRV': '13.7V\r\r>',
           '0902':
-              '014\r0: 49 02 01 35 54 46\r1: 43 5A 35 41 4E 33 4D\r2: 58 32 35 35 32 31 36\r\r>',
+              '014\r0: 49 02 01 54 45 53\r1: 54 54 41 43 30 30 30\r2: 30 30 30 30 30 30 31\r\r>',
           '0101': '41 01 84 07 65 00\r41 01 00 04 00 00\r\r>',
           // Motor: P0300, P0301, P0171, P0420. Caja: P0700.
           '03':
@@ -199,9 +199,9 @@ class MockElm327 {
           'ATSP0': 'OK\r\r>',
           'ATDPN': 'A6\r\r>',
           'ATRV': '13.3V\r\r>',
-          // 49 02 01 + ASCII "5TFCZ5AN3MX255216"
+          // 49 02 01 + ASCII "TESTTAC0000000001" (VIN ficticio: no debe cruzarse con un vehículo real)
           '0902':
-              '49 02 01 35 54 46 43 5A 35 41 4E 33 4D 58 32 35 35 32 31 36\r\r>',
+              '49 02 01 54 45 53 54 54 41 43 30 30 30 30 30 30 30 30 30 31\r\r>',
           // MIL ON (82 = bit 7 ON + 2 DTCs), monitores completados (DD = 00)
           '0101': '41 01 82 07 65 00\r\r>',
           '03': '43 02 03 00 03 01\r\r>', // P0300 + P0301 confirmed
