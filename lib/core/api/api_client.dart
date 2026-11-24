@@ -355,4 +355,58 @@ class ApiClient {
       'resolution': resolution.trim(),
     }) as Map<String, dynamic>;
   }
+
+  /// Crea a mano la orden de un escaneo que no abrió una sola (severidad
+  /// leve). Lo usa el inspector para derivar el vehículo al taller. Responde
+  /// 409 si el escaneo ya tiene orden o el vehículo tiene otra abierta.
+  Future<Map<String, dynamic>> createWorkOrder(
+    String scanId, {
+    String? description,
+  }) async {
+    return await _post('/work-orders', {
+      'scanId': scanId,
+      if (description != null && description.trim().isNotEmpty)
+        'description': description.trim(),
+    }) as Map<String, dynamic>;
+  }
+
+  // ------------------------------------------------- checklist y repuestos
+
+  /// Agrega una tarea al checklist de verificación de la orden.
+  Future<void> addTask(String workOrderId, String description) async {
+    await _post('/work-orders/$workOrderId/tasks', {
+      'description': description.trim(),
+    });
+  }
+
+  /// Marca una tarea como hecha o la vuelve a pendiente.
+  Future<void> toggleTask(
+    String workOrderId,
+    String taskId,
+    bool completed,
+  ) async {
+    await _patch('/work-orders/$workOrderId/tasks/$taskId', {
+      'completed': completed,
+    });
+  }
+
+  /// Inventario de repuestos del taller.
+  Future<List<dynamic>> getSpareParts() async {
+    return await _get('/catalog/spare-parts') as List<dynamic>;
+  }
+
+  /// Registra un repuesto usado en la orden y lo descuenta del stock. Si no
+  /// alcanza, el backend responde 400 con el stock disponible.
+  Future<void> addPart(
+    String workOrderId,
+    String sparePartId,
+    int quantity, {
+    String? notes,
+  }) async {
+    await _post('/work-orders/$workOrderId/parts', {
+      'sparePartId': sparePartId,
+      'quantity': quantity,
+      if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+    });
+  }
 }

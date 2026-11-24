@@ -174,7 +174,24 @@ void main() {
       expect(find.text('Órdenes'), findsOneWidget);
     });
 
-    testWidgets('el inspector no la ve', (tester) async {
+    testWidgets('el inspector la ve desde que tiene order:read', (tester) async {
+      await abrirConPermisos(
+        tester,
+        [
+          'vehicle:read',
+          'scan:read',
+          'scan:create',
+          'diagnosis:read',
+          'order:read',
+          'order:create'
+        ],
+        'INSPECTOR',
+      );
+      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.text('Órdenes'), findsOneWidget);
+    });
+
+    testWidgets('sin order:read no aparece', (tester) async {
       await abrirConPermisos(
         tester,
         ['vehicle:read', 'scan:read', 'scan:create', 'diagnosis:read'],

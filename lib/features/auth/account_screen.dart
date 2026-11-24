@@ -58,6 +58,15 @@ class AccountScreen extends StatelessWidget {
                           (auth.user?['email'] as String?) ?? '',
                           style: const TextStyle(fontSize: 13, color: AppColors.ink2),
                         ),
+                        if ((auth.user?['unit'] as Map<String, dynamic>?)?['name']
+                            case final String facultad) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            facultad,
+                            style: const TextStyle(
+                                fontSize: 13, color: AppColors.ink2),
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         StatusBadge(auth.roleLabel, tone: BadgeTone.brand),
                       ],
@@ -70,7 +79,8 @@ class AccountScreen extends StatelessWidget {
           const SizedBox(height: 16),
           const _SectionLabel('Notificaciones'),
           const SizedBox(height: 8),
-          _NotificationsCard(push: auth.push, receivesAlerts: auth.can('order:read')),
+          _NotificationsCard(
+              push: auth.push, receivesAlerts: auth.can('order:update_status')),
           const SizedBox(height: 16),
           const _SectionLabel('Permisos de su rol'),
           const SizedBox(height: 8),
@@ -163,7 +173,9 @@ class _NotificationsCard extends StatefulWidget {
 
   final PushService push;
 
-  /// Solo quienes pueden ver órdenes reciben el aviso de una orden nueva.
+  /// Solo quienes atienden órdenes (mecánico y administrador) reciben el aviso
+  /// de una orden nueva. El inspector recibe los de los vehículos de los que
+  /// es responsable.
   final bool receivesAlerts;
 
   @override
@@ -189,8 +201,9 @@ class _NotificationsCardState extends State<_NotificationsCard> {
         builder: (context, status, _) {
           final active = status == PushStatus.activo;
           final text = active && !widget.receivesAlerts
-              ? 'Notificaciones activas. Los avisos de órdenes de trabajo '
-                  'llegan a mecánicos y administradores.'
+              ? 'Notificaciones activas. Le llegan los avisos de los vehículos '
+                  'de los que es responsable; los de órdenes nuevas van a '
+                  'mecánicos y administradores.'
               : PushService.describe(status);
 
           return Padding(

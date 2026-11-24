@@ -90,7 +90,24 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
     final auth = context.watch<AuthService>();
     final vehicles = _vehicles.whereType<Map<String, dynamic>>().toList();
 
-    // El inspector ve primero los vehículos de los que es responsable.
+    final unit = auth.user?['unit'] as Map<String, dynamic>?;
+
+    // Un inspector con facultad recibe del backend solo los vehículos de su
+    // facultad: se muestran todos juntos.
+    if (auth.user?['role'] == 'INSPECTOR' && unit != null) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        children: [
+          _SectionTitle(
+              'Vehículos de ${unit['name'] ?? 'mi facultad'} (${vehicles.length})'),
+          for (final v in vehicles) _VehicleCard(v),
+        ],
+      );
+    }
+
+    // Sin facultad, el inspector ve primero los vehículos de los que es
+    // responsable.
     if (auth.user?['role'] == 'INSPECTOR') {
       final (mine, others) =
           separarPorResponsable(vehicles, auth.user?['id'] as String?);
@@ -175,6 +192,7 @@ class _VehicleCard extends StatelessWidget {
         [alias, description].where((t) => t.isNotEmpty).join(' · ');
     final responsible =
         (vehicle['responsible'] as Map<String, dynamic>?)?['name'] as String?;
+    final unit = (vehicle['unit'] as Map<String, dynamic>?)?['name'] as String?;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -223,7 +241,10 @@ class _VehicleCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              'Responsable: ${responsible ?? 'sin asignar'}',
+              [
+                if (unit != null) unit,
+                'Responsable: ${responsible ?? 'sin asignar'}',
+              ].join(' · '),
               style: const TextStyle(fontSize: 12, color: AppColors.ink3),
             ),
           ],

@@ -9,7 +9,9 @@ import '../../core/theme/app_theme.dart';
 import '../../core/ui/badges.dart';
 import '../../core/ui/format.dart';
 import '../../core/ui/hipotesis.dart';
+import '../../core/ui/notice.dart';
 import '../../core/ui/panel.dart';
+import '../alerts/work_order_detail_screen.dart';
 
 /// Severidades a partir de las cuales el backend pide hipótesis a la IA.
 const severidadesConHipotesis = ['MEDIUM', 'HIGH', 'CRITICAL'];
@@ -39,6 +41,11 @@ class _ScanDetailScreenState extends State<ScanDetailScreen> {
   Timer? _timer;
   int _sondeos = 0;
 
+  final _motivoController = TextEditingController();
+  bool _enviando = false;
+  String? _aviso;
+  NoticeTone _avisoTono = NoticeTone.success;
+
   @override
   void initState() {
     super.initState();
@@ -48,7 +55,49 @@ class _ScanDetailScreenState extends State<ScanDetailScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _motivoController.dispose();
     super.dispose();
+  }
+
+  /// El inspector deriva al taller un escaneo que no abrió orden sola
+  /// (severidad leve), con su observación para el mecánico.
+  Future<void> _enviarAlTaller() async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _enviando = true;
+      _aviso = null;
+    });
+    try {
+      await _api.createWorkOrder(
+        widget.scanId,
+        description: _motivoController.text,
+      );
+      if (!mounted) return;
+      _motivoController.clear();
+      setState(() {
+        _aviso = 'Orden enviada al taller. Los mecánicos ya la ven en su lista.';
+        _avisoTono = NoticeTone.success;
+      });
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _aviso = mensajeDeError(e, 'No se pudo crear la orden de trabajo.');
+        _avisoTono = NoticeTone.error;
+      });
+      // Si ya tenía orden, se recarga para mostrarla.
+      if (e is ApiException && e.statusCode == 409) await _load();
+    } finally {
+      if (mounted) setState(() => _enviando = false);
+    }
+  }
+
+  void _abrirOrden(String id) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WorkOrderDetailScreen(workOrderId: id),
+      ),
+    );
   }
 
   bool _generando(Map<String, dynamic> scan) =>
@@ -127,7 +176,9 @@ class _ScanDetailScreenState extends State<ScanDetailScreen> {
         (scan['rationale'] ?? scan['notes'])?.toString().trim() ?? '';
     final scannedBy = scan['scannedBy'] as Map<String, dynamic>?;
     final description = descripcionVehiculo(vehicle);
-    final verHipotesis = context.read<AuthService>().can('diagnosis:read');
+    final auth = context.watch<AuthService>();
+    final verHipotesis = auth.can('diagnosis:read');
+    final workOrder = scan['workOrder'] as Map<String, dynamic>?;
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -179,6 +230,12 @@ class _ScanDetailScreenState extends State<ScanDetailScreen> {
             ),
             const SizedBox(height: 12),
           ],
+          if (_aviso != null) ...[
+            Notice.text(_aviso!, tone: _avisoTono),
+            const SizedBox(height: 12),
+          ],
+          _buildOrden(auth, workOrder),
+          const SizedBox(height: 12),
           Panel(
             title: 'Códigos de falla (${dtcs.length})',
             child: dtcs.isEmpty
@@ -209,6 +266,79 @@ class _ScanDetailScreenState extends State<ScanDetailScreen> {
               child: _buildHipotesis(scan),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// La orden de trabajo del escaneo, o la opción de enviarlo al taller.
+  Widget _buildOrden(AuthService auth, Map<String, dynamic>? workOrder) {
+    if (workOrder != null) {
+      final status = workOrder['status'] as String?;
+      return Panel(
+        title: 'Orden de trabajo',
+        trailing: OrderStatusBadge(status),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              status == 'COMPLETED'
+                  ? 'La orden de este escaneo se completó y el vehículo volvió a quedar operativo.'
+                  : status == 'CANCELLED'
+                      ? 'La orden de este escaneo se canceló.'
+                      : 'Este escaneo tiene una orden abierta en el taller. El vehículo '
+                          'sigue en evaluación hasta que se cierre como completada.',
+              style: const TextStyle(fontSize: 14, height: 1.4),
+            ),
+            if (auth.can('order:read')) ...[
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: () => _abrirOrden(workOrder['id'] as String),
+                child: const Text('Ver orden'),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    if (!auth.can('order:create')) {
+      return const Panel(
+        title: 'Orden de trabajo',
+        child: Text(
+          'Este escaneo no abrió una orden de trabajo.',
+          style: TextStyle(fontSize: 14, color: AppColors.ink2),
+        ),
+      );
+    }
+
+    return Panel(
+      title: 'Enviar al taller',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Este escaneo no abrió una orden sola. Si en terreno nota algo que '
+            'requiere revisión, puede derivar el vehículo al mecánico.',
+            style: TextStyle(fontSize: 14, color: AppColors.ink2, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _motivoController,
+            minLines: 2,
+            maxLines: 4,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Observación para el mecánico',
+              hintText: 'Ej.: Vibración en ralentí aunque el código es pendiente',
+            ),
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: _enviando ? null : _enviarAlTaller,
+            icon: const Icon(Icons.build_outlined),
+            label: Text(_enviando ? 'Enviando…' : 'Enviar al taller'),
+          ),
         ],
       ),
     );

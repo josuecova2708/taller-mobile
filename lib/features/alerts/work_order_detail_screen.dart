@@ -10,14 +10,15 @@ import '../../core/ui/hipotesis.dart';
 import '../../core/ui/notice.dart';
 import '../../core/ui/panel.dart';
 import '../history/scan_detail_screen.dart' show DtcRow;
-
-const _estadosAbiertos = ['OPEN', 'IN_PROGRESS'];
+import '../orders/order_rules.dart';
+import 'order_sections.dart';
 
 /// Detalle de una orden de trabajo. Se abre desde la pestaña «Órdenes» y al
 /// tocar la notificación push de una orden nueva (CU18).
 ///
-/// Según quién mira, permite tomar la orden, registrar el avance y cerrarla.
-/// Las mismas reglas las aplica el backend; aquí solo deciden qué se muestra.
+/// Según quién mira, permite tomar la orden, marcar el checklist, registrar
+/// repuestos y avances, y cerrarla. El inspector solo la consulta. Las mismas
+/// reglas las aplica el backend; aquí solo deciden qué se muestra.
 class WorkOrderDetailScreen extends StatefulWidget {
   const WorkOrderDetailScreen({
     super.key,
@@ -127,13 +128,46 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
         return 'Avance guardado en el historial.';
       });
 
+  void _toggleTask(String taskId, bool completed) => _run(() async {
+        await _api.toggleTask(widget.workOrderId, taskId, completed);
+        return completed ? 'Tarea marcada como hecha.' : 'Tarea vuelta a pendiente.';
+      });
+
+  /// Devuelve si se agregó, para que el campo se limpie solo en ese caso.
+  Future<bool> _addTask(String description) async {
+    var ok = false;
+    await _run(() async {
+      await _api.addTask(widget.workOrderId, description);
+      ok = true;
+      return 'Tarea agregada al checklist.';
+    });
+    return ok;
+  }
+
+  Future<void> _registerPart() async {
+    final elegido = await elegirRepuesto(context, _api);
+    if (elegido == null || !mounted) return;
+    await _run(() async {
+      await _api.addPart(
+        widget.workOrderId,
+        elegido.sparePartId,
+        elegido.quantity,
+        notes: elegido.notes,
+      );
+      return 'Repuesto registrado y descontado del inventario.';
+    });
+  }
+
   Future<void> _confirmClose() async {
     final completed = _closeStatus == 'COMPLETED';
+    final tareas = contarTareas(_order?['tasks'] as List<dynamic>?);
+    final pendientes = tareas.total - tareas.hechas;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Cerrar orden'),
         content: Text(
+          '${completed && pendientes > 0 ? 'Quedan $pendientes ${pendientes == 1 ? 'tarea' : 'tareas'} del checklist sin marcar. ' : ''}'
           'La orden quedará como ${completed ? 'completada' : 'cancelada'} y no se '
           'podrá volver a abrir. '
           '${completed ? 'El vehículo vuelve a quedar operativo y queda registrado que usted lo cerró.' : 'El estado del vehículo se tomará de su último escaneo.'}',
@@ -145,7 +179,9 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Cerrar orden'),
+            child: Text(completed && pendientes > 0
+                ? 'Cerrar igual'
+                : 'Cerrar orden'),
           ),
         ],
       ),
@@ -192,8 +228,10 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
       final forbidden = error is ApiException && error.isForbidden;
       if (forbidden) {
         return const EmptyState(
-          title: 'Su rol no puede ver órdenes de trabajo',
-          message: 'Las ven los mecánicos y los administradores.',
+          title: 'No puede ver esta orden de trabajo',
+          message:
+              'Las ven los mecánicos, los administradores y los inspectores de la '
+              'facultad del vehículo.',
         );
       }
       return EmptyState.error(
@@ -218,17 +256,28 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
     final priority = (order['priority'] as String?) ?? '';
     final status = (order['status'] as String?) ?? '';
     final notes = (order['notes'] as String?)?.trim() ?? '';
+    final tasks = (order['tasks'] as List<dynamic>?) ?? const [];
+    final partsUsed = (order['partsUsed'] as List<dynamic>?) ?? const [];
+    final history = (order['statusHistory'] as List<dynamic>?) ?? const [];
+    final conteo = contarTareas(tasks);
+    final unit = vehicle['unit'] as Map<String, dynamic>?;
 
-    final open = _estadosAbiertos.contains(status);
+    final open = estadosAbiertos.contains(status);
     final isAssigned = userId != null && assignedTo?['id'] == userId;
     final manages = auth.can('order:assign');
+    // El inspector consulta las órdenes de su facultad pero no las atiende.
+    final soloConsulta = !auth.can('order:update_status');
     final canTake = open &&
         status == 'OPEN' &&
         assignedTo == null &&
         role == 'MECHANIC' &&
         auth.can('order:update_status');
-    final canAdvance =
-        open && auth.can('order:update_status') && (isAssigned || manages);
+    final canAdvance = puedeTrabajarOrden(
+      order,
+      userId: userId,
+      puedeActualizar: auth.can('order:update_status'),
+      administra: manages,
+    );
     final canClose = open && auth.can('order:close') && (isAssigned || manages);
 
     final plate = (vehicle['plate'] as String?) ?? '-';
@@ -278,6 +327,10 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
             const SizedBox(height: 12),
             Notice.text(_message!, tone: _messageTone),
           ],
+          if (soloConsulta) ...[
+            const SizedBox(height: 12),
+            Notice.text(pasoDeLaOrden(order)),
+          ],
           const SizedBox(height: 12),
           _Section(
             title: 'Motivo',
@@ -300,6 +353,11 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
                   label: 'Mecánico',
                   value: (assignedTo?['name'] as String?) ?? 'Sin asignar',
                 ),
+                if (unit != null)
+                  Dato(
+                    label: 'Facultad',
+                    value: (unit['name'] as String?) ?? '-',
+                  ),
                 Dato(
                   label: 'Responsable del vehículo',
                   value: (responsible?['name'] as String?) ?? 'Sin responsable',
@@ -345,6 +403,37 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
                     : 'Esta orden todavía no tiene mecánico asignado.',
               ),
             ),
+          _Section(
+            title: 'Checklist de verificación',
+            trailing: conteo.total == 0
+                ? null
+                : Text(
+                    '${conteo.hechas}/${conteo.total}',
+                    style: AppText.nums.copyWith(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: conteo.hechas == conteo.total
+                          ? AppColors.ok
+                          : AppColors.ink2,
+                    ),
+                  ),
+            child: ChecklistSection(
+              tasks: tasks,
+              editable: canAdvance,
+              busy: _working,
+              onToggle: _toggleTask,
+              onAdd: _addTask,
+            ),
+          ),
+          _Section(
+            title: 'Repuestos usados',
+            child: PartsSection(
+              partsUsed: partsUsed,
+              editable: canAdvance && auth.can('inventory:read'),
+              busy: _working,
+              onRegister: _registerPart,
+            ),
+          ),
           if (canAdvance)
             _Section(
               title: 'Avance del trabajo',
@@ -429,7 +518,11 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
               ),
             ),
           _Section(
-            title: 'Historial de notas',
+            title: 'Historial de estados',
+            child: StatusHistorySection(history: history),
+          ),
+          _Section(
+            title: 'Notas de la orden',
             child: Text(
               notes.isEmpty ? 'Todavía no hay notas en esta orden.' : notes,
               style: TextStyle(
@@ -468,16 +561,17 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
 }
 
 class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.child});
+  const _Section({required this.title, required this.child, this.trailing});
 
   final String title;
   final Widget child;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Panel(title: title, child: child),
+      child: Panel(title: title, trailing: trailing, child: child),
     );
   }
 }

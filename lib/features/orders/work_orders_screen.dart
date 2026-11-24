@@ -8,10 +8,7 @@ import '../../core/ui/badges.dart';
 import '../../core/ui/format.dart';
 import '../../core/ui/panel.dart';
 import '../alerts/work_order_detail_screen.dart';
-
-const _estadosAbiertos = ['OPEN', 'IN_PROGRESS'];
-
-const _ordenPrioridad = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+import 'order_rules.dart';
 
 /// Separa las órdenes abiertas en las secciones de la pantalla.
 ///
@@ -24,18 +21,9 @@ const _ordenPrioridad = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 }) agruparOrdenes(List<dynamic> ordenes, String? userId) {
   final abiertas = ordenes
       .whereType<Map<String, dynamic>>()
-      .where((o) => _estadosAbiertos.contains(o['status']))
+      .where((o) => estadosAbiertos.contains(o['status']))
       .toList()
-    ..sort((a, b) {
-      final porPrioridad = _ordenPrioridad
-          .indexOf('${a['priority']}')
-          .compareTo(_ordenPrioridad.indexOf('${b['priority']}'));
-      if (porPrioridad != 0) return porPrioridad;
-      return '${a['createdAt']}'.compareTo('${b['createdAt']}');
-    });
-
-  String? asignadoA(Map<String, dynamic> o) =>
-      (o['assignedTo'] as Map<String, dynamic>?)?['id'] as String?;
+    ..sort(compararPorUrgencia);
 
   return (
     sinAsignar: abiertas.where((o) => asignadoA(o) == null).toList(),
@@ -48,11 +36,14 @@ const _ordenPrioridad = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
   );
 }
 
-/// Órdenes de trabajo abiertas, para mecánicos y administradores.
+/// Órdenes de trabajo.
 ///
-/// «Sin asignar» son las que cualquier mecánico puede tomar; «Mis órdenes»,
-/// las que el usuario tiene a cargo. Quien administra las órdenes ve también
-/// las asignadas a otros, para poder reasignarlas o cerrarlas.
+/// Para mecánicos y administradores: «Sin asignar» son las que cualquier
+/// mecánico puede tomar; «Mis órdenes», las que el usuario tiene a cargo.
+/// Quien administra las órdenes ve también las asignadas a otros.
+///
+/// El inspector solo las consulta (las de los vehículos de su facultad): las
+/// ve por estado, sin acciones, y con las últimas cerradas.
 class WorkOrdersScreen extends StatefulWidget {
   const WorkOrdersScreen({super.key});
 
@@ -133,6 +124,8 @@ class _WorkOrdersScreenState extends State<WorkOrdersScreen> {
     }
 
     final auth = context.watch<AuthService>();
+    if (!auth.can('order:update_status')) return _buildSoloConsulta();
+
     final grupos = agruparOrdenes(_orders, auth.user?['id'] as String?);
     final manages = auth.can('order:assign');
 
@@ -169,6 +162,55 @@ class _WorkOrdersScreenState extends State<WorkOrdersScreen> {
           else
             for (final o in grupos.otras)
               _OrderCard(order: o, onTap: _open, showAssignee: true),
+        ],
+      ],
+    );
+  }
+
+  /// Vista del inspector: consulta en qué va cada orden, sin acciones.
+  Widget _buildSoloConsulta() {
+    final grupos = agruparOrdenesPorEstado(_orders);
+
+    if (grupos.sinMecanico.isEmpty &&
+        grupos.enTaller.isEmpty &&
+        grupos.cerradas.isEmpty) {
+      return const EmptyState(
+        title: 'No hay órdenes de sus vehículos',
+        message:
+            'Se crean solas cuando un escaneo detecta una falla, o desde el detalle '
+            'de un escaneo con «Enviar al taller».',
+      );
+    }
+
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(bottom: 16),
+          child: Text(
+            'Órdenes de los vehículos de su facultad. Las atienden los mecánicos; '
+            'aquí puede seguir en qué paso va cada una.',
+            style: TextStyle(fontSize: 13, color: AppColors.ink2),
+          ),
+        ),
+        _SectionHeader('Esperando mecánico', grupos.sinMecanico.length),
+        if (grupos.sinMecanico.isEmpty)
+          const _EmptyLine('Ninguna.')
+        else
+          for (final o in grupos.sinMecanico) _OrderCard(order: o, onTap: _open),
+        const SizedBox(height: 20),
+        _SectionHeader('En el taller', grupos.enTaller.length),
+        if (grupos.enTaller.isEmpty)
+          const _EmptyLine('Ninguna.')
+        else
+          for (final o in grupos.enTaller)
+            _OrderCard(order: o, onTap: _open, showAssignee: true),
+        if (grupos.cerradas.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          _SectionHeader('Cerradas recientemente', grupos.cerradas.length),
+          for (final o in grupos.cerradas)
+            _OrderCard(order: o, onTap: _open, showAssignee: true),
         ],
       ],
     );
@@ -250,7 +292,10 @@ class _OrderCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    PriorityBadge(order['priority'] as String?),
+                    if (estadosAbiertos.contains(order['status']))
+                      PriorityBadge(order['priority'] as String?)
+                    else
+                      OrderStatusBadge(order['status'] as String?),
                   ],
                 ),
                 if (alias.isNotEmpty)
@@ -267,7 +312,10 @@ class _OrderCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   [
-                    'Creada ${hace(order['createdAt'] as String?)}',
+                    if (estadosAbiertos.contains(order['status']))
+                      'Creada ${hace(order['createdAt'] as String?)}'
+                    else
+                      'Cerrada ${hace(order['closedAt'] as String?)}',
                     if (showAssignee && assignedTo != null)
                       'A cargo de ${assignedTo['name']}',
                     if (order['status'] == 'IN_PROGRESS') 'En proceso',
